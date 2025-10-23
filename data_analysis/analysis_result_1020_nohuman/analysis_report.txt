@@ -1,0 +1,23 @@
+IMU Data Analysis Report
+==================================================
+Analysis Time: 2025-10-23 18:41:05
+Data Folder: imu_data_1020_nohuman
+Files Analyzed: 2
+Recording Duration: 30 seconds (trimmed 5s from both ends)
+
+File Statistics:
+----------------------------------------
+
+File: off_1imu_simple_20251020_135400.csv
+  Data Points: 1778
+  Duration: 29.98 seconds
+  X-Angle - Mean: 0.01бу, Std: 5.74бу
+  X-Angular Velocity - Mean: -1.70бу/s, Std: 25.25бу/s
+  Temperature - Mean: 24.98буC
+
+File: on_1imu_simple_20251020_135707.csv
+  Data Points: 1523
+  Duration: 29.97 seconds
+  X-Angle - Mean: 0.59бу, Std: 4.79бу
+  X-Angular Velocity - Mean: -1.74бу/s, Std: 17.07бу/s
+  Temperature - Mean: 26.03буC

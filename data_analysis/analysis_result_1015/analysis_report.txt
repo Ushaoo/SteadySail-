@@ -1,7 +1,7 @@
 IMU Data Analysis Report
 ==================================================
-Analysis Time: 2025-10-16 21:44:23
-Data Folder: imu_data
+Analysis Time: 2025-10-23 18:41:44
+Data Folder: imu_data_1015
 Files Analyzed: 4
 Recording Duration: 30 seconds (trimmed 5s from both ends)
 

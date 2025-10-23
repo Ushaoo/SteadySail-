@@ -1,0 +1,23 @@
+IMU Data Analysis Report
+==================================================
+Analysis Time: 2025-10-23 18:40:58
+Data Folder: imu_data_1020_benchmark
+Files Analyzed: 2
+Recording Duration: 30 seconds (trimmed 5s from both ends)
+
+File Statistics:
+----------------------------------------
+
+File: benchmark_1imu_simple_20251020_135538.csv
+  Data Points: 1776
+  Duration: 29.97 seconds
+  X-Angle - Mean: 0.48бу, Std: 3.97бу
+  X-Angular Velocity - Mean: -1.56бу/s, Std: 5.41бу/s
+  Temperature - Mean: 25.56буC
+
+File: benchmark_human1imu_simple_20251020_161706.csv
+  Data Points: 1777
+  Duration: 29.97 seconds
+  X-Angle - Mean: -0.51бу, Std: 6.67бу
+  X-Angular Velocity - Mean: -1.83бу/s, Std: 14.18бу/s
+  Temperature - Mean: 28.63буC

@@ -397,15 +397,49 @@ Data Points: {len(df)}, Duration: {df['time_seconds'].max():.2f}s
 
 def main():
     """
-    Main function
+    Main function with automatic folder detection and processing
     """
-    # Configuration
-    data_folder = "imu_data"  # Replace with your data folder path
-    output_folder = "analysis_results"
+    # Find all imu_data folders
+    imu_data_folders = glob.glob("imu_data_*")
     
-    # Create analyzer and run analysis
-    analyzer = IMUDataAnalyzer(data_folder, output_folder)
-    analyzer.analyze_all_files()
+    if not imu_data_folders:
+        print("No imu_data_* folders found in current directory")
+        return
+    
+    print(f"Found {len(imu_data_folders)} imu_data folders")
+    
+    # Process each imu_data folder
+    for imu_folder in imu_data_folders:
+        # Extract suffix from folder name
+        suffix = imu_folder.replace("imu_data_", "")
+        output_folder = f"analysis_result_{suffix}"
+        
+        # Check if analysis already exists
+        if os.path.exists(output_folder):
+            print(f"Analysis already exists for {imu_folder}, skipping...")
+            continue
+        
+        print(f"\nProcessing {imu_folder} -> {output_folder}")
+        print("=" * 50)
+        
+        # Create analyzer and run analysis
+        analyzer = IMUDataAnalyzer(imu_folder, output_folder)
+        analyzer.analyze_all_files()
+    
+    # Report unprocessed folders
+    print("\n" + "=" * 60)
+    print("Processing Summary:")
+    processed = [f for f in imu_data_folders if os.path.exists(f"analysis_result_{f.replace('imu_data_', '')}")]
+    unprocessed = [f for f in imu_data_folders if not os.path.exists(f"analysis_result_{f.replace('imu_data_', '')}")]
+    
+    print(f"Processed folders: {len(processed)}")
+    print(f"Unprocessed folders: {len(unprocessed)}")
+    
+    if unprocessed:
+        print("\nUnprocessed imu_data folders:")
+        for folder in unprocessed:
+            print(f"  - {folder}")
 
 if __name__ == "__main__":
     main()
+主要功能特

@@ -1,0 +1,23 @@
+IMU Data Analysis Report
+==================================================
+Analysis Time: 2025-10-23 18:41:07
+Data Folder: imu_data_1020_wy
+Files Analyzed: 2
+Recording Duration: 30 seconds (trimmed 5s from both ends)
+
+File Statistics:
+----------------------------------------
+
+File: off_human_wyimu_simple_20251020_163233.csv
+  Data Points: 1779
+  Duration: 29.98 seconds
+  X-Angle - Mean: -4.72бу, Std: 11.31бу
+  X-Angular Velocity - Mean: -1.55бу/s, Std: 21.22бу/s
+  Temperature - Mean: 30.03буC
+
+File: on_human_wyimu_simple_20251020_162957.csv
+  Data Points: 1479
+  Duration: 29.99 seconds
+  X-Angle - Mean: -3.30бу, Std: 13.50бу
+  X-Angular Velocity - Mean: -1.17бу/s, Std: 21.29бу/s
+  Temperature - Mean: 29.77буC

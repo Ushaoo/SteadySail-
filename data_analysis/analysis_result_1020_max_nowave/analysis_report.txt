@@ -1,0 +1,30 @@
+IMU Data Analysis Report
+==================================================
+Analysis Time: 2025-10-23 18:43:56
+Data Folder: imu_data_1020_max_nowave
+Files Analyzed: 3
+Recording Duration: 30 seconds (trimmed 5s from both ends)
+
+File Statistics:
+----------------------------------------
+
+File: off_human1imu_simple_20251020_143044.csv
+  Data Points: 1778
+  Duration: 29.99 seconds
+  X-Angle - Mean: -8.18бу, Std: 13.75бу
+  X-Angular Velocity - Mean: -2.55бу/s, Std: 19.04бу/s
+  Temperature - Mean: 29.40буC
+
+File: on_human1imu_simple_20251020_142858.csv
+  Data Points: 1476
+  Duration: 29.99 seconds
+  X-Angle - Mean: 1.44бу, Std: 6.78бу
+  X-Angular Velocity - Mean: -1.77бу/s, Std: 9.93бу/s
+  Temperature - Mean: 29.32буC
+
+File: on_human2imu_simple_20251020_143156.csv
+  Data Points: 1473
+  Duration: 29.98 seconds
+  X-Angle - Mean: -6.34бу, Std: 11.19бу
+  X-Angular Velocity - Mean: -2.80бу/s, Std: 26.49бу/s
+  Temperature - Mean: 29.43буC
