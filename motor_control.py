@@ -73,12 +73,12 @@ class PIDController:
 
 def main():
     # 检查是否运行系统辨识模式
-    if len(sys.argv) > 1 and sys.argv[1] == 'identify':
+    '''if len(sys.argv) > 1 and sys.argv[1] == 'identify':
         if SYSTEM_IDENTIFICATION_AVAILABLE:
             run_system_identification()
         else:
             print("错误: 系统辨识功能不可用,请确保system_identification.py在相同目录下")
-        return
+        return'''
 
     # 正常控制模式
     # Initialize the PCA9685 module for motor control
