@@ -3,7 +3,7 @@ import mpu6050
 import time
 import math
 
-mode = 4
+mode = 3
 motor_channels = [0, 1, 2, 3, 4, 5]
 
 motor_channel_1 = 0
@@ -27,7 +27,7 @@ try:
     # Initialize all motors to neutral
     for ch in motor_channels:
         pwm.setServoPulse(ch, base_pulse)
-    time.sleep(2)
+    time.sleep(3)
 
     if mode == 1:
         while True:
@@ -44,45 +44,45 @@ try:
         while True:
             
         
-            pwm.setServoPulse(motor_channel_1, motor_pulse)
-            pwm.setServoPulse(motor_channel_2, motor_pulse)
-            pwm.setServoPulse(motor_channel_3, 3000 - motor_pulse)
+            # pwm.setServoPulse(motor_channel_1, motor_pulse)
+            # pwm.setServoPulse(motor_channel_2, 3000 - motor_pulse)
+            # pwm.setServoPulse(motor_channel_3, motor_pulse)
+            # pwm.setServoPulse(motor_channel_4, motor_pulse)
+            # pwm.setServoPulse(motor_channel_5, 0)
 
-            pwm.setServoPulse(motor_channel_4, 3000 - motor_pulse)
-            pwm.setServoPulse(motor_channel_5, motor_pulse)
-            pwm.setServoPulse(motor_channel_6, motor_pulse)
-            time.sleep(5)
+            # print("up")
+            
+            # time.sleep(5)
 
 
             motor_pulse = 3000 - motor_pulse  
-            pwm.setServoPulse(motor_channel_1, motor_pulse)
-            pwm.setServoPulse(motor_channel_2, motor_pulse)
-            pwm.setServoPulse(motor_channel_3, 3000 - motor_pulse)
+            # pwm.setServoPulse(motor_channel_1, motor_pulse)
+            # pwm.setServoPulse(motor_channel_2, 3000 - motor_pulse)
+            # pwm.setServoPulse(motor_channel_3, motor_pulse)
+            # pwm.setServoPulse(motor_channel_4, motor_pulse)
+            # pwm.setServoPulse(motor_channel_5, 0)
+            # print("down")
+            
+            # time.sleep(5)
 
+
+            pwm.setServoPulse(motor_channel_1, motor_pulse)
+            pwm.setServoPulse(motor_channel_2, 3000 - motor_pulse)
+            pwm.setServoPulse(motor_channel_3, 3000 - motor_pulse)
             pwm.setServoPulse(motor_channel_4, 3000 - motor_pulse)
-            pwm.setServoPulse(motor_channel_5, motor_pulse)
-            pwm.setServoPulse(motor_channel_6, motor_pulse)
-            time.sleep(5)
-
-
-            pwm.setServoPulse(motor_channel_1, motor_pulse)
-            pwm.setServoPulse(motor_channel_2, motor_pulse)
-            pwm.setServoPulse(motor_channel_3, 3000 - motor_pulse)
-
-            pwm.setServoPulse(motor_channel_4, motor_pulse)
-            pwm.setServoPulse(motor_channel_5, 3000 - motor_pulse)
-            pwm.setServoPulse(motor_channel_6, 3000 - motor_pulse)
-            time.sleep(5)
+            pwm.setServoPulse(motor_channel_5, 0)
+            print("tilt1")
+            
+            time.sleep(8)
             
             motor_pulse = 3000 - motor_pulse 
             pwm.setServoPulse(motor_channel_1, motor_pulse)
-            pwm.setServoPulse(motor_channel_2, motor_pulse)
+            pwm.setServoPulse(motor_channel_2, 3000 - motor_pulse)
             pwm.setServoPulse(motor_channel_3, 3000 - motor_pulse)
-
-            pwm.setServoPulse(motor_channel_4, motor_pulse)
-            pwm.setServoPulse(motor_channel_5, 3000 - motor_pulse)
-            pwm.setServoPulse(motor_channel_6, 3000 - motor_pulse)
-            time.sleep(5)
+            pwm.setServoPulse(motor_channel_4, 3000 - motor_pulse)
+            pwm.setServoPulse(motor_channel_5, 0)
+            print("tilt2")
+            time.sleep(8)
 
 
     if mode == 3:
@@ -90,14 +90,16 @@ try:
             # pwm.setServoPulse(motor_channel_1, 1500)
             # print("1500")
             # time.sleep(0.1)
-            pwm.setServoPulse(motor_channel_1, 2000)
-            print("2000")
-            time.sleep(3)
-            pwm.setServoPulse(motor_channel_1, 2000)
+            pwm.setServoPulse(motor_channel_3, 1700)
+            pwm.setServoPulse(motor_channel_1, 1700)
+
+            # pwm.setServoPulse(motor_channel_2, 3000 - 1700)
+            # pwm.setServoPulse(motor_channel_4, 1700)
+
+            pwm.setServoPulse(motor_channel_5, 2000)
+            
+            
             print("1500")
-            time.sleep(3)
-            pwm.setServoPulse(motor_channel_1, 100)
-            print("1000")
             time.sleep(3)
 
 
