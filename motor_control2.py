@@ -307,12 +307,24 @@ class PIDController:
     
     # 其他update方法保持不变...
     def acc_update(self, current_value, dt):
-        # 实现同上
-        pass
+        error = self.target - current_value
+        proportional = self.kp * error
+        self.integral += error * dt
+        integral = self.ki * self.integral
+        derivative = self.kd * (error - self.previous_error) / dt
+        output = proportional + integral + derivative
+        self.previous_error = error
+        return output
         
     def angacc_update(self, current_value, dt):
-        # 实现同上  
-        pass
+        error = self.target - current_value
+        proportional = self.kp * error
+        self.integral += error * dt
+        integral = self.ki * self.integral
+        derivative = self.kd * (error - self.previous_error) / dt
+        output = proportional + integral + derivative
+        self.previous_error = error
+        return output
         
     def set_gyro_target(self, target):
         self.target = target
@@ -363,8 +375,12 @@ def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter, data_l
                 angle = avg_angle  # 使用平均角度
             except Exception as e:
                 print(f"Dual IMU error: {e}, falling back to single IMU")
+                if acc_data['z'] == 0:
+                    acc_data['z'] = 0.0001
                 angle = math.atan(acc_data['y']/acc_data['z']) * 180 / math.pi
         else:
+            if acc_data['z'] == 0:
+                acc_data['z'] = 0.0001
             angle = math.atan(acc_data['y']/acc_data['z']) * 180 / math.pi
         
         angular_velocity_x = math.radians(gyro_data['x'])
