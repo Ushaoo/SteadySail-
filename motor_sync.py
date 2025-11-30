@@ -3,7 +3,7 @@ import mpu6050
 import time
 import math
 
-mode = 3
+mode = 4
 motor_channels = [0, 1, 2, 3, 4, 5]
 
 motor_channel_1 = 0
@@ -107,6 +107,7 @@ try:
         while True:
             for i in range(1000, 2100, 100):
                 pwm.setServoPulse(motor_channel_1, i)
+                pwm.setServoPulse(motor_channel_3, i)
                 print(f"Set all motors to {i} us")
                 time.sleep(1)
 
