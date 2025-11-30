@@ -9,7 +9,9 @@ from queue import SimpleQueue, Empty
 from threading import Thread, Event
 import csv
 from datetime import datetime
-
+# 导入独立的参数调节模块
+from web_pid_tuner import ParameterManager, WebPIDTuner
+from enhanced_pid import EnhancedPIDController
 try:
     import matplotlib.pyplot as plt
     from matplotlib.animation import FuncAnimation
@@ -24,6 +26,8 @@ mode = True  # True: gyro+accel PID, False: angaccel PID
 ENABLE_PLOTTER = True
 ENABLE_DUAL_IMU = False  # 是否启用双IMU
 ENABLE_DATA_LOGGING = False  # 是否启用数据记录
+ENABLE_WEB_TUNER = True  # 启用Web参数调节器
+WEB_TUNER_PORT = 5000
 
 # 绘图显示控制
 PLOT_ANGLE = True
@@ -285,7 +289,7 @@ class DataLogger:
         except Exception as e:
             print(f"Error writing data: {e}")
 
-# PIDController类保持不变（使用原有代码）
+''' # PIDController类保持不变（使用原有代码）
 class PIDController:
     def __init__(self, kp, ki, kd, target_value=0):
         self.kp = kp
@@ -337,9 +341,9 @@ class PIDController:
         
     def reset(self):
         self.previous_error = 0
-        self.integral = 0
+        self.integral = 0 '''
 
-def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter, data_logger, stop_event):
+def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter,param_manager, data_logger, stop_event):
     motor_channel = 0
     base_pulse = 1500
     min_pulse = 1000
@@ -355,10 +359,30 @@ def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter, data_l
     angular_acceleration_x = 0.0
     parameter = 0
     
+    # 获取初始参数
+    current_params = param_manager.get_current_params()
     while not stop_event.is_set():
         current_time = time.time()
         dt = current_time - previous_time
-        
+        # 动态更新PID参数（每次循环检查）
+        new_params = param_manager.get_current_params()
+        if new_params != current_params:
+            # 参数已更新，应用到PID控制器
+            gyro_params = new_params['gyro']
+            acc_params = new_params['acc']
+            angacc_params = new_params['angacc']
+            
+            gyro_pid.update_parameters(gyro_params['kp'], gyro_params['ki'], gyro_params['kd'], gyro_params['target'])
+            acc_pid.update_parameters(acc_params['kp'], acc_params['ki'], acc_params['kd'], acc_params['target'])
+            angacc_pid.update_parameters(angacc_params['kp'], angacc_params['ki'], angacc_params['kd'], angacc_params['target'])
+            
+            # 更新角度阈值
+            angle_low = new_params['angle_low']
+            angle_high = new_params['angle_high']
+            angle_capsized = new_params['angle_capsized']
+            
+            current_params = new_params
+            print("PID parameters updated")
         # 读取IMU数据
         gyro_data = imu.get_gyro_data()
         acc_data = imu.get_accel_data()
@@ -390,9 +414,14 @@ def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter, data_l
         else:
             angular_acceleration_x = 0.0
         previous_angular_velocity_x = angular_velocity_x
-
+         # 使用当前模式
+        current_mode = param_manager.get_current_params()['mode']
+        angle_low = param_manager.get_current_params()['angle_low']
+        angle_high = param_manager.get_current_params()['angle_high']
+        angle_capsized = param_manager.get_current_params()['angle_capsized']
+        
         # PID控制逻辑（保持原有代码）
-        if mode:
+        if current_mode:
             angle_abs = abs(angle)
             if angle_abs < angle_low:
                 pid_output = gyro_pid.gyro_update(angular_velocity_x, dt)
@@ -449,7 +478,21 @@ def main():
     
     enable_dual_imu = input("Enable dual IMU? (y/n): ").strip().lower()  
     ENABLE_DUAL_IMU = (enable_dual_imu == 'y')
+     # 初始化参数管理器
+    param_manager = ParameterManager()
     
+    # 初始化Web PID调节器
+    web_tuner = None
+    if ENABLE_WEB_TUNER:
+        try:
+            web_tuner = WebPIDTuner(param_manager, port=WEB_TUNER_PORT)
+            if web_tuner.start():
+                print(f"Web PID Tuner started on port {WEB_TUNER_PORT}")
+            else:
+                print("Failed to start Web PID Tuner")
+        except Exception as e:
+            print(f"Error starting Web PID Tuner: {e}")
+            ENABLE_WEB_TUNER = False
     # 初始化硬件
     pwm = PCA9685(address=0x40, debug=True, bus_num=1)
     pwm.setPWMFreq(50)
@@ -466,10 +509,23 @@ def main():
             print(f"Failed to initialize second IMU: {e}")
             ENABLE_DUAL_IMU = False
     
-    # PID控制器设置
-    gyro_pid = PIDController(294.0, 0.08, 0.0, 0.0)
-    acc_pid = PIDController(29.0, 0.000, 0.008, 0.0)
-    angacc_pid = PIDController(292.0, 0.000, 0.008, 0.0)
+     # 获取初始参数
+    initial_params = param_manager.get_current_params()
+    gyro_params = initial_params['gyro']
+    acc_params = initial_params['acc']
+    angacc_params = initial_params['angacc']
+    
+    # 初始化增强的PID控制器
+    gyro_pid = EnhancedPIDController(gyro_params['kp'], gyro_params['ki'], gyro_params['kd'], 
+                                   gyro_params['target'], name="Gyro PID")
+    acc_pid = EnhancedPIDController(acc_params['kp'], acc_params['ki'], acc_params['kd'], 
+                                  acc_params['target'], name="Acc PID")
+    angacc_pid = EnhancedPIDController(angacc_params['kp'], angacc_params['ki'], angacc_params['kd'], 
+                                     angacc_params['target'], name="AngAcc PID")
+    
+    print("Starting enhanced motor control system...")
+    if ENABLE_WEB_TUNER:
+        print(f"Web interface available at: http://<raspberry_pi_ip>:{WEB_TUNER_PORT}")
     
     print("Starting enhanced motor control system...")
     print("Press Ctrl+C to stop")
