@@ -11,6 +11,11 @@ motor_env/
 .venv/
 venv/
 ENV/
+torpedo/
+torpedo/torpedo_keyboard_control.py
+torpedo/torpedo_main.py
+
+pifpio/
 
 # OS / tooling
 .DS_Store
