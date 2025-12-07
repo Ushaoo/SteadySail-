@@ -76,8 +76,8 @@ class PCA9685:
     self.write(self.__LED0_ON_H + 4*channel, (on >> 8) & 0xFF)
     self.write(self.__LED0_OFF_L + 4*channel, off & 0xFF)
     self.write(self.__LED0_OFF_H + 4*channel, (off >> 8) & 0xFF)
-    if self.debug:
-      print("channel: %d  LED_ON: %d LED_OFF: %d" % (channel, on, off))
+    '''if self.debug:
+      print("channel: %d  LED_ON: %d LED_OFF: %d" % (channel, on, off))'''
 
   def setServoPulse(self, channel, pulse_us):
     """

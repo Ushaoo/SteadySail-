@@ -7,6 +7,8 @@ import math
 from collections import deque
 from queue import SimpleQueue, Empty
 from threading import Thread, Event
+import matplotlib.widgets as widgets
+
 import csv
 from datetime import datetime
 # 导入独立的参数调节模块
@@ -300,9 +302,11 @@ def process_dual_imu_data(imu, imu2, previous_angular_velocity, dt):
     try:
         gyro_data1 = imu.get_gyro_data()
         acc_data1 = imu.get_accel_data()
+        print("1",gyro_data1,acc_data1)
         angle1 = math.atan2(acc_data1['y'], acc_data1['z']) * 180 / math.pi
         gyro_x1 = math.radians(gyro_data1['x'])
         success1 = True
+        #print("1号IMU正常工作")
     except Exception as e:
         print(f"主IMU读取失败: {e}")
         angle1, gyro_x1 = 0, 0
@@ -314,9 +318,11 @@ def process_dual_imu_data(imu, imu2, previous_angular_velocity, dt):
         try:
             gyro_data2 = imu2.get_gyro_data()
             acc_data2 = imu2.get_accel_data()
-            angle2 = math.atan2(acc_data2['y'], acc_data2['z']) * 180 / math.pi
+            print("2",gyro_data2,acc_data2)
+            angle2 = math.atan2(-acc_data2['y'], acc_data2['z']) * 180 / math.pi
             gyro_x2 = math.radians(gyro_data2['x'])
             success2 = True
+            #print("2号IMU正常工作")
         except Exception as e:
             print(f"副IMU读取失败: {e}")
             success2 = False
@@ -412,7 +418,7 @@ def process_dual_imu_data(imu, imu2, previous_angular_velocity, dt):
             'gyro1': None,
             'gyro2': None
         }
-def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter,param_manager, data_logger, stop_event):
+def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter, param_manager, data_logger, stop_event):
     motor_channel = 0
     base_pulse = 1500
     min_pulse = 1000
@@ -431,15 +437,30 @@ def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter,param_m
     
     # 获取初始参数
     current_params = param_manager.get_current_params()
+    
+    # 初始化角度阈值变量（避免作用域问题）
+    angle_low = current_params['angle_low']
+    angle_high = current_params['angle_high']
+    angle_capsized = current_params['angle_capsized']
+    current_mode = current_params['mode']
+    
+    # 诊断输出计数器
+    diagnosis_report_counter = 0
+    
     while not stop_event.is_set():
-        current_time = time.time()
+        # 1. 首先测量循环开始时间（用于计算准确的dt）
+        loop_start_time = time.time()
+        current_time = loop_start_time
         dt = current_time - previous_time
-        # 动态更新PID参数（每次循环检查）
+        
+        # 2. 一次性获取所有当前参数（避免多次读取不一致）
         new_params = param_manager.get_current_params()
-        print(current_params)
+        
+        # 3. 检查参数是否有变化
         if new_params != current_params:
-
-            # 参数已更新，应用到PID控制器
+            print("检测到参数变化，更新PID参数...")
+            
+            # 更新PID参数
             gyro_params = new_params['gyro']
             acc_params = new_params['acc']
             angacc_params = new_params['angacc']
@@ -448,103 +469,124 @@ def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter,param_m
             acc_pid.update_parameters(acc_params['kp'], acc_params['ki'], acc_params['kd'], acc_params['target'])
             angacc_pid.update_parameters(angacc_params['kp'], angacc_params['ki'], angacc_params['kd'], angacc_params['target'])
             
-            # 更新角度阈值
+            # 更新本地变量（用于本次循环）
             angle_low = new_params['angle_low']
             angle_high = new_params['angle_high']
             angle_capsized = new_params['angle_capsized']
+            current_mode = new_params['mode']
             
             current_params = new_params
-            print("PID parameters updated")
-        # 使用优化的双IMU数据处理
-        imu_data = process_dual_imu_data(imu, imu2, previous_angular_velocity_x, dt)
-
-        # 提取融合后的数据
+            print("PID参数已更新")
+        
+        # 4. 处理IMU数据（使用统一的dt）
+        try:
+            imu_data = process_dual_imu_data(imu, imu2, previous_angular_velocity_x, dt)
+        except Exception as e:
+            print(f"IMU数据处理错误: {e}")
+            # 跳过本次循环，保持电机在安全状态
+            time.sleep(0.01)
+            continue
+        
+        # 5. 提取融合后的数据
         angle = imu_data['angle']
         angular_velocity_x = imu_data['angular_velocity']
         angular_acceleration_x = imu_data['angular_acceleration']
         sensor_status = imu_data['sensor_status']
-
-        # 更新历史值
-        previous_angular_velocity_x = angular_velocity_x
-
-        '''# 记录传感器状态（用于故障诊断和显示）
-        if ENABLE_FAULT_DIAGNOSIS and fault_diagnosis:
-            # 更新故障诊断系统
-            pass '''
-
-        # 在输出中显示传感器状态
-        if sensor_status != 'DUAL_OK' and sensor_status != 'SINGLE_IMU1':
-            print(f"传感器状态: {sensor_status}")
+        
+        # 6. 更新角度历史值（用于下次计算角加速度）
+        # 注意：只在这里更新一次
         previous_angular_velocity_x = angular_velocity_x
         
-         # 使用当前模式
-        current_mode = param_manager.get_current_params()['mode']
-        angle_low = param_manager.get_current_params()['angle_low']
-        angle_high = param_manager.get_current_params()['angle_high']
-        angle_capsized = param_manager.get_current_params()['angle_capsized']
-        # 更新PID控制器的当前角度（用于自适应滤波）
+        # 7. 在输出中显示传感器状态
+        if sensor_status != 'DUAL_OK' and sensor_status != 'SINGLE_IMU1':
+            print(f"传感器状态: {sensor_status}")
+        
+        # 8. 更新PID控制器的当前角度（用于自适应滤波）
         if ENABLE_FILTER:
             gyro_pid.set_current_angle(angle)
             acc_pid.set_current_angle(angle)
             angacc_pid.set_current_angle(angle)
-        # PID控制逻辑
-        if current_mode:
-            angle_abs = abs(angle)
+        
+        # 9. PID控制逻辑（使用本地变量，避免多次读取参数）
+        angle_abs = abs(angle)
+        
+        if current_mode:  # Gyro+Accel模式
             if angle_abs < angle_low:
                 pid_output = gyro_pid.gyro_update(angular_velocity_x, dt)
             elif angle_abs >= angle_low and angle_abs <= angle_high:
-                parameter = (angle_abs - angle_low)/(angle_high - angle_low)
-                pid_output = (1 - parameter) * gyro_pid.gyro_update(angular_velocity_x, dt) + parameter * acc_pid.acc_update(angle, dt)
+                parameter = (angle_abs - angle_low) / (angle_high - angle_low)
+                gyro_out = gyro_pid.gyro_update(angular_velocity_x, dt)
+                acc_out = acc_pid.acc_update(angle, dt)
+                pid_output = (1 - parameter) * gyro_out + parameter * acc_out
             elif angle_abs > angle_high:
                 pid_output = acc_pid.acc_update(angle, dt)
             elif angle_abs > angle_capsized:
+                # 紧急情况：增加输出增益
                 pid_output = acc_pid.acc_update(angle, dt) * 2000
             else:
                 pid_output = gyro_pid.gyro_update(angular_velocity_x, dt)
-        else:
+        else:  # Angular Acceleration模式
             pid_output = angacc_pid.angacc_update(angular_acceleration_x, dt)
-
+        
+        # 10. 计算并限制电机输出
         motor_adjustment = max(min(pid_output, 500), -500)
         motor_pulse = int(base_pulse + motor_adjustment)
         motor_pulse = max(min(motor_pulse, max_pulse), min_pulse)
         
-        pwm.setServoPulse(motor_channel_1, 3000 - motor_pulse)
-        pwm.setServoPulse(motor_channel_2, 3000 - motor_pulse)
-
-        # 数据记录
+        # 11. 输出到电机
+        try:
+            pwm.setServoPulse(motor_channel_1, 3000 - motor_pulse)
+            pwm.setServoPulse(motor_channel_2, 3000 - motor_pulse)
+        except Exception as e:
+            print(f"电机控制错误: {e}")
+        
+        # 12. 数据记录
         if data_logger.enabled:
-            temp = imu.get_temp()
-            data_logger.log_data(current_time,  temp,
-                               angle, math.degrees(angular_velocity_x), 
-                               math.degrees(angular_acceleration_x),
-                               pid_output, motor_pulse)
-
-        # 绘图数据
-        # 使用新数据结构的绘图
+            try:
+                temp = imu.get_temp()
+                data_logger.log_data(current_time, temp,
+                                   angle, math.degrees(angular_velocity_x), 
+                                   math.degrees(angular_acceleration_x),
+                                   pid_output, motor_pulse)
+            except Exception as e:
+                print(f"数据记录错误: {e}")
+        
+        # 13. 绘图数据
         if plotter:
-            # 从imu_data中获取两个传感器的原始数据用于显示
-            angle1 = imu_data.get('angle1')
-            angle2 = imu_data.get('angle2')
-            
-            plotter.record(current_time - control_start,
-                        angle,
-                        math.degrees(angular_velocity_x),
-                        pid_output,
-                        math.degrees(angular_acceleration_x),
-                        motor_pulse,
-                        angle1, angle2, angle)  # 注意：第三个角度参数现在是融合后的角度
-
-        print(f"Angle: {angle:.3f} deg, "
-              f"Angular Vel: {angular_velocity_x:.3f} rad/s, "
-              f"PID Output: {pid_output:.2f}, "
-              f"Motor Pulse: {motor_pulse} us")
-
+            try:
+                angle1 = imu_data.get('angle1')
+                angle2 = imu_data.get('angle2')
+                
+                plotter.record(current_time - control_start,
+                             angle,
+                             math.degrees(angular_velocity_x),
+                             pid_output,
+                             math.degrees(angular_acceleration_x),
+                             motor_pulse,
+                             angle1, angle2, angle)
+            except Exception as e:
+                print(f"绘图数据记录错误: {e}")
+        
+        # 14. 定期输出状态（减少输出频率）
+        diagnosis_report_counter += 1
+        if diagnosis_report_counter >= 100:  # 每100次循环输出一次（约1秒）
+            print(f"角度: {angle:.1f}°, "
+                  f"角速度: {math.degrees(angular_velocity_x):.1f}°/s, "
+                  f"PID输出: {pid_output:.1f}, "
+                  f"电机脉冲: {motor_pulse}us")
+            diagnosis_report_counter = 0
+        
+        # 15. 更新时间戳
         previous_time = current_time
-        time.sleep(0.01)
+        
+        # 16. 精确控制循环频率（补偿计算时间）
+        loop_elapsed = time.time() - loop_start_time
+        sleep_time = max(0.01 - loop_elapsed, 0.001)  # 目标100Hz，最小睡眠1ms
+        time.sleep(sleep_time)
 
 def main():
     # 用户输入配置
-    global ENABLE_DUAL_IMU, ENABLE_DATA_LOGGING,ENABLE_FILTER
+    global ENABLE_DUAL_IMU, ENABLE_DATA_LOGGING,ENABLE_FILTER,ENABLE_WEB_TUNER
     # 滤波器启用选项
     enable_filter = input("Enable adaptive filtering? (y/n): ").strip().lower()
     ENABLE_FILTER = (enable_filter == 'y')
@@ -579,7 +621,7 @@ def main():
     
     if ENABLE_DUAL_IMU:
         try:
-            imu2 = mpu6050.mpu6050(0x69)
+            imu2 = mpu6050.mpu6050(0x68,2)
             print("Dual IMU enabled - using addresses 0x68 and 0x69")
         except Exception as e:
             print(f"Failed to initialize second IMU: {e}")

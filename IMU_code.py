@@ -27,6 +27,8 @@ while True:
     acc_y =  accelerometer_data['y']
     acc_z =  accelerometer_data['z']
 
+    if acc_z == 0:
+        acc_z = 0.0001  # Prevent division by zero
     angle = math.atan(acc_y/acc_z) * 180 / math.pi
 
 

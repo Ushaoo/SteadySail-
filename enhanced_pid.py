@@ -57,7 +57,7 @@ class EnhancedPIDController:
     支持运行时参数更新和性能监控
     """
     
-    def __init__(self, kp, ki, kd, target_value=0, name="PID"):
+    def __init__(self, kp, ki, kd, target_value=0, name="PID", enable_filter=True):
         self.kp = kp
         self.ki = ki  
         self.kd = kd
@@ -74,11 +74,17 @@ class EnhancedPIDController:
         self.max_output = 0
         self.min_output = 0
         
-        # 积分限制（抗饱和）
+        # 积分和输出限制
         self.integral_limit = None
-        
-        # 输出限制
         self.output_limit = None
+        
+        # 滤波功能
+        self.enable_filter = enable_filter
+        self.value_filter = AdaptiveLowPassFilter(base_alpha=0.25)
+        self.derivative_filter = LowPassFilter(alpha=0.33)  # τ=0.02s
+        
+        # 存储当前角度用于自适应滤波
+        self.current_angle = 0
     
     def update_parameters(self, kp, ki, kd, target=None):
         """动态更新PID参数"""
