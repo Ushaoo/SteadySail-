@@ -3,8 +3,8 @@ import mpu6050
 import time
 import math
 
-mode = 4
-motor_channels = [0, 1, 2, 3, 4, 5]
+mode = 1
+motor_channels = [0, 1, 2, 3, 4, 5, 6]
 
 motor_channel_1 = 0
 motor_channel_2 = 1
@@ -21,7 +21,7 @@ pwm.setPWMFreq(50)  # Set frequency to 50 Hz
 # imu = mpu6050.mpu6050(0x68)
 
 base_pulse = 1500  # Neutral pulse width (1500 us for most ESCs)
-motor_pulse = 2000  # Test pulse width to run the motor
+motor_pulse = 1700  # Test pulse width to run the motor
 
 try:
     # Initialize all motors to neutral
@@ -106,8 +106,8 @@ try:
     if mode == 4:
         while True:
             for i in range(1000, 2100, 100):
-                pwm.setServoPulse(motor_channel_1, i)
-                pwm.setServoPulse(motor_channel_3, i)
+                pwm.setServoPulse(motor_channel_5, 3000 - i)
+                pwm.setServoPulse(motor_channel_6, i)
                 print(f"Set all motors to {i} us")
                 time.sleep(1)
 

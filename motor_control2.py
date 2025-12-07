@@ -45,7 +45,8 @@ angle_low = 5
 angle_high = 10
 angle_capsized = 35
 
-motor_channel_1 = 0
+motor_channel_1 = 4
+motor_channel_2 = 5
 
 class EnhancedIMUPIDPlotter:
     """增强版绘图器，整合了原IMUPlotter和DualIMU功能"""
@@ -343,7 +344,7 @@ class PIDController:
         self.previous_error = 0
         self.integral = 0 '''
 
-def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter,param_manager, data_logger, stop_event):
+def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter, param_manager, data_logger, stop_event):
     motor_channel = 0
     base_pulse = 1500
     min_pulse = 1000
@@ -351,6 +352,7 @@ def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter,param_m
     
     # 初始化电机
     pwm.setServoPulse(motor_channel_1, base_pulse)
+    pwm.setServoPulse(motor_channel_2, base_pulse)
     time.sleep(3)
     
     control_start = time.time()
@@ -366,7 +368,9 @@ def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter,param_m
         dt = current_time - previous_time
         # 动态更新PID参数（每次循环检查）
         new_params = param_manager.get_current_params()
+        print(current_params)
         if new_params != current_params:
+
             # 参数已更新，应用到PID控制器
             gyro_params = new_params['gyro']
             acc_params = new_params['acc']
@@ -441,7 +445,8 @@ def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter,param_m
         motor_pulse = int(base_pulse + motor_adjustment)
         motor_pulse = max(min(motor_pulse, max_pulse), min_pulse)
         
-        pwm.setServoPulse(motor_channel_1, motor_pulse)
+        pwm.setServoPulse(motor_channel_1, 3000 - motor_pulse)
+        pwm.setServoPulse(motor_channel_2, 3000 - motor_pulse)
 
         # 数据记录
         if data_logger.enabled:
@@ -471,7 +476,7 @@ def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter,param_m
 
 def main():
     # 用户输入配置
-    global ENABLE_DUAL_IMU, ENABLE_DATA_LOGGING
+    global ENABLE_DUAL_IMU, ENABLE_DATA_LOGGING, ENABLE_WEB_TUNER
     
     enable_logging = input("Enable IMU data logging? (y/n): ").strip().lower()
     ENABLE_DATA_LOGGING = (enable_logging == 'y')
@@ -547,7 +552,7 @@ def main():
     stop_event = Event()
     control_thread = Thread(target=_control_loop, 
                           args=(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, 
-                                plotter, data_logger, stop_event))
+                                plotter, param_manager, data_logger, stop_event))
     control_thread.start()
     
     if plotter:
@@ -564,8 +569,10 @@ def main():
         # 安全停止电机
         base_pulse = 1500
         pwm.setServoPulse(motor_channel_1, base_pulse)
+        pwm.setServoPulse(motor_channel_2, base_pulse)
         time.sleep(0.5)
         pwm.setServoPulse(motor_channel_1, 0)
+        pwm.setServoPulse(motor_channel_2, 0)
         
         # 停止数据记录
         if data_logger.enabled:

@@ -30,10 +30,10 @@ class ParameterManager:
         self.current_params = {
             'gyro': {'kp': 294.0, 'ki': 0.08, 'kd': 0.0, 'target': 0.0},
             'acc': {'kp': 29.0, 'ki': 0.000, 'kd': 0.008, 'target': 0.0},
-            'angacc': {'kp': 292.0, 'ki': 0.000, 'kd': 0.008, 'target': 0.0},
+            'angacc': {'kp': 0.0, 'ki': 0.000, 'kd': 0.008, 'target': 0.0},
             'mode': True,
-            'angle_low': 5,
-            'angle_high': 10,
+            'angle_low': 20,
+            'angle_high': 30,
             'angle_capsized': 35
         }
         
@@ -51,7 +51,7 @@ class ParameterManager:
                 'default': {
                     'gyro': {'kp': 294.0, 'ki': 0.08, 'kd': 0.0},
                     'acc': {'kp': 29.0, 'ki': 0.000, 'kd': 0.008},
-                    'angacc': {'kp': 292.0, 'ki': 0.000, 'kd': 0.008}
+                    'angacc': {'kp': 0.0, 'ki': 0.000, 'kd': 0.008}
                 },
                 'aggressive': {
                     'gyro': {'kp': 400.0, 'ki': 0.1, 'kd': 0.0},
