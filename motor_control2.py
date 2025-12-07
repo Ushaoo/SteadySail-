@@ -8,7 +8,7 @@ from collections import deque
 from queue import SimpleQueue, Empty
 from threading import Thread, Event
 import matplotlib.widgets as widgets
-
+import json
 import csv
 from datetime import datetime
 # 导入独立的参数调节模块
@@ -50,6 +50,25 @@ angle_capsized = 35
 motor_channel_1 = 4
 motor_channel_2 = 5
 
+def load_calibrations():
+    """加载两个IMU的校准参数"""
+    try:
+        with open('calibration_imu1.json', 'r') as f:
+            cal1 = json.load(f)
+        print("IMU1校准已加载")
+    except:
+        print("IMU1校准文件未找到，使用默认值")
+        cal1 = {'gyro_bias': {'x': 0, 'y': 0, 'z': 0}, 'accel_bias': {'x': 0, 'y': 0, 'z': 0}}
+    
+    try:
+        with open('calibration_imu2.json', 'r') as f:
+            cal2 = json.load(f)
+        print("IMU2校准已加载")
+    except:
+        print("IMU2校准文件未找到，使用默认值")
+        cal2 = {'gyro_bias': {'x': 0, 'y': 0, 'z': 0}, 'accel_bias': {'x': 0, 'y': 0, 'z': 0}}
+    
+    return cal1, cal2
 class EnhancedIMUPIDPlotter:
     """增强版绘图器，整合了原IMUPlotter和DualIMU功能"""
     
@@ -193,6 +212,13 @@ class EnhancedIMUPIDPlotter:
                     self.lines[line_idx].set_data(self.time_data, self.angle1_data)
                     self.lines[line_idx+1].set_data(self.time_data, self.angle2_data)
                     self.lines[line_idx+2].set_data(self.time_data, self.avg_angle_data)
+                    # 对该子图重新计算坐标并自适应纵轴
+                    ax = axes[i]
+                    ax.relim()
+                    ax.autoscale_view()
+                    # 显示平均角度的最新值
+                    if self.avg_angle_data:
+                        self.value_texts[i].set_text(f'{self.avg_angle_data[-1]:.2f}')
                     line_idx += 3
                 else:
                     line = self.lines[line_idx]
@@ -293,40 +319,56 @@ class DataLogger:
             print(f"Error writing data: {e}")
             
 # 优化后的双IMU数据处理
-def process_dual_imu_data(imu, imu2, previous_angular_velocity, dt):
+def process_dual_imu_data(imu, imu2, previous_angular_velocity, dt, cal1, cal2):
     """
-    处理双IMU数据,返回融合后的角度、角速度和角加速度
-    包括故障检测和降级处理
+    处理双IMU数据，应用校准
     """
+    
     # 读取主IMU数据
     try:
         gyro_data1 = imu.get_gyro_data()
         acc_data1 = imu.get_accel_data()
-        print("1",gyro_data1,acc_data1)
+        
+        # 应用校准
+        gyro_data1['x'] -= cal1['gyro_bias']['x']
+        gyro_data1['y'] -= cal1['gyro_bias']['y']
+        gyro_data1['z'] -= cal1['gyro_bias']['z']
+        
+        acc_data1['x'] -= cal1['accel_bias']['x']
+        acc_data1['y'] -= cal1['accel_bias']['y']
+        acc_data1['z'] -= cal1['accel_bias']['z']
+        
         angle1 = math.atan2(acc_data1['y'], acc_data1['z']) * 180 / math.pi
-        gyro_x1 = math.radians(gyro_data1['x'])
+        gyro_x1 = -math.radians(gyro_data1['x'])
         success1 = True
-        #print("1号IMU正常工作")
     except Exception as e:
         print(f"主IMU读取失败: {e}")
         angle1, gyro_x1 = 0, 0
         success1 = False
     
-    # 读取副IMU数据（如果启用双IMU）
+    # 读取副IMU数据
     angle2, gyro_x2, success2 = 0, 0, False
     if imu2 and ENABLE_DUAL_IMU:
         try:
             gyro_data2 = imu2.get_gyro_data()
             acc_data2 = imu2.get_accel_data()
-            print("2",gyro_data2,acc_data2)
+            
+            # 应用校准
+            gyro_data2['x'] -= cal2['gyro_bias']['x']
+            gyro_data2['y'] -= cal2['gyro_bias']['y']
+            gyro_data2['z'] -= cal2['gyro_bias']['z']
+            
+            acc_data2['x'] -= cal2['accel_bias']['x']
+            acc_data2['y'] -= cal2['accel_bias']['y']
+            acc_data2['z'] -= cal2['accel_bias']['z']
+            
             angle2 = math.atan2(-acc_data2['y'], acc_data2['z']) * 180 / math.pi
             gyro_x2 = math.radians(gyro_data2['x'])
             success2 = True
-            #print("2号IMU正常工作")
         except Exception as e:
             print(f"副IMU读取失败: {e}")
             success2 = False
-    
+   
     # 故障检测和降级策略
     if ENABLE_DUAL_IMU and success1 and success2:
         # 双IMU都正常，进行数据融合
@@ -418,7 +460,7 @@ def process_dual_imu_data(imu, imu2, previous_angular_velocity, dt):
             'gyro1': None,
             'gyro2': None
         }
-def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter, param_manager, data_logger, stop_event):
+def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter, param_manager, data_logger, stop_event,c1,c2):
     motor_channel = 0
     base_pulse = 1500
     min_pulse = 1000
@@ -480,7 +522,7 @@ def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter, param_
         
         # 4. 处理IMU数据（使用统一的dt）
         try:
-            imu_data = process_dual_imu_data(imu, imu2, previous_angular_velocity_x, dt)
+            imu_data = process_dual_imu_data(imu, imu2, previous_angular_velocity_x, dt,c1,c2)
         except Exception as e:
             print(f"IMU数据处理错误: {e}")
             # 跳过本次循环，保持电机在安全状态
@@ -598,7 +640,7 @@ def main():
     ENABLE_DUAL_IMU = (enable_dual_imu == 'y')
      # 初始化参数管理器
     param_manager = ParameterManager()
-    
+    c1,c2= load_calibrations()
     # 初始化Web PID调节器
     web_tuner = None
     if ENABLE_WEB_TUNER:
@@ -665,7 +707,7 @@ def main():
     stop_event = Event()
     control_thread = Thread(target=_control_loop, 
                           args=(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, 
-                                plotter, param_manager, data_logger, stop_event))
+                                plotter, param_manager, data_logger, stop_event,c1,c2))
     control_thread.start()
     
     if plotter:
