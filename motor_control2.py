@@ -288,61 +288,129 @@ class DataLogger:
                 
         except Exception as e:
             print(f"Error writing data: {e}")
-
-''' # PIDController类保持不变（使用原有代码）
-class PIDController:
-    def __init__(self, kp, ki, kd, target_value=0):
-        self.kp = kp
-        self.ki = ki  
-        self.kd = kd
-        self.target = target_value
-        self.previous_error = 0
-        self.integral = 0
-        
-    def gyro_update(self, current_value, dt):
-        error = self.target - current_value
-        proportional = self.kp * error
-        self.integral += error * dt
-        integral = self.ki * self.integral
-        derivative = self.kd * (error - self.previous_error) / dt
-        output = proportional + integral + derivative
-        self.previous_error = error
-        return output
+            
+# 优化后的双IMU数据处理
+def process_dual_imu_data(imu, imu2, previous_angular_velocity, dt):
+    """
+    处理双IMU数据,返回融合后的角度、角速度和角加速度
+    包括故障检测和降级处理
+    """
+    # 读取主IMU数据
+    try:
+        gyro_data1 = imu.get_gyro_data()
+        acc_data1 = imu.get_accel_data()
+        angle1 = math.atan2(acc_data1['y'], acc_data1['z']) * 180 / math.pi
+        gyro_x1 = math.radians(gyro_data1['x'])
+        success1 = True
+    except Exception as e:
+        print(f"主IMU读取失败: {e}")
+        angle1, gyro_x1 = 0, 0
+        success1 = False
     
-    # 其他update方法保持不变...
-    def acc_update(self, current_value, dt):
-        error = self.target - current_value
-        proportional = self.kp * error
-        self.integral += error * dt
-        integral = self.ki * self.integral
-        derivative = self.kd * (error - self.previous_error) / dt
-        output = proportional + integral + derivative
-        self.previous_error = error
-        return output
+    # 读取副IMU数据（如果启用双IMU）
+    angle2, gyro_x2, success2 = 0, 0, False
+    if imu2 and ENABLE_DUAL_IMU:
+        try:
+            gyro_data2 = imu2.get_gyro_data()
+            acc_data2 = imu2.get_accel_data()
+            angle2 = math.atan2(acc_data2['y'], acc_data2['z']) * 180 / math.pi
+            gyro_x2 = math.radians(gyro_data2['x'])
+            success2 = True
+        except Exception as e:
+            print(f"副IMU读取失败: {e}")
+            success2 = False
+    
+    # 故障检测和降级策略
+    if ENABLE_DUAL_IMU and success1 and success2:
+        # 双IMU都正常，进行数据融合
         
-    def angacc_update(self, current_value, dt):
-        error = self.target - current_value
-        proportional = self.kp * error
-        self.integral += error * dt
-        integral = self.ki * self.integral
-        derivative = self.kd * (error - self.previous_error) / dt
-        output = proportional + integral + derivative
-        self.previous_error = error
-        return output
+        # 1. 角度融合（简单平均）
+        angle = (angle1 + angle2) / 2
         
-    def set_gyro_target(self, target):
-        self.target = target
-
-    def set_acc_target(self, target):
-        self.target = target
-
-    def set_angacc_target(self, target):
-        self.target = target
+        # 2. 角速度融合（简单平均）
+        angular_velocity = (gyro_x1 + gyro_x2) / 2
         
-    def reset(self):
-        self.previous_error = 0
-        self.integral = 0 '''
-
+        # 3. 一致性检测
+        angle_diff = abs(angle1 - angle2)
+        gyro_diff = abs(gyro_x1 - gyro_x2)
+        
+        # 如果差异过大，可能传感器有问题
+        if angle_diff > 15.0 or gyro_diff > 1.0:  # 阈值可调整
+            print(f"双IMU数据不一致: 角度差={angle_diff:.1f}°, 角速度差={math.degrees(gyro_diff):.1f}°/s")
+            # 可以选择使用更可靠的那个传感器，或使用平均值但标记为可疑
+            
+        # 4. 角加速度计算（基于融合后的角速度）
+        if dt > 0:
+            angular_acceleration = (angular_velocity - previous_angular_velocity) / dt
+        else:
+            angular_acceleration = 0.0
+            
+        return {
+            'angle': angle,
+            'angular_velocity': angular_velocity,
+            'angular_acceleration': angular_acceleration,
+            'sensor_status': 'DUAL_OK',
+            'angle1': angle1,
+            'angle2': angle2,
+            'gyro1': gyro_x1,
+            'gyro2': gyro_x2
+        }
+    
+    elif success1:
+        # 只有主IMU正常，使用主IMU数据
+        angular_velocity = gyro_x1
+        angle = angle1
+        
+        if dt > 0:
+            angular_acceleration = (angular_velocity - previous_angular_velocity) / dt
+        else:
+            angular_acceleration = 0.0
+            
+        return {
+            'angle': angle,
+            'angular_velocity': angular_velocity,
+            'angular_acceleration': angular_acceleration,
+            'sensor_status': 'SINGLE_IMU1',
+            'angle1': angle1,
+            'angle2': None,
+            'gyro1': gyro_x1,
+            'gyro2': None
+        }
+    
+    elif success2:
+        # 只有副IMU正常，使用副IMU数据
+        angular_velocity = gyro_x2
+        angle = angle2
+        
+        if dt > 0:
+            angular_acceleration = (angular_velocity - previous_angular_velocity) / dt
+        else:
+            angular_acceleration = 0.0
+            
+        return {
+            'angle': angle,
+            'angular_velocity': angular_velocity,
+            'angular_acceleration': angular_acceleration,
+            'sensor_status': 'SINGLE_IMU2',
+            'angle1': None,
+            'angle2': angle2,
+            'gyro1': None,
+            'gyro2': gyro_x2
+        }
+    
+    else:
+        # 两个IMU都失效，使用上次的值
+        print("两个IMU都失效!")
+        return {
+            'angle': 0,  # 应该使用安全值
+            'angular_velocity': 0,
+            'angular_acceleration': 0,
+            'sensor_status': 'FAIL',
+            'angle1': None,
+            'angle2': None,
+            'gyro1': None,
+            'gyro2': None
+        }
 def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter,param_manager, data_logger, stop_event):
     motor_channel = 0
     base_pulse = 1500
@@ -383,44 +451,39 @@ def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter,param_m
             
             current_params = new_params
             print("PID parameters updated")
-        # 读取IMU数据
-        gyro_data = imu.get_gyro_data()
-        acc_data = imu.get_accel_data()
-        
-        # 双IMU处理
-        angle1 = angle2 = avg_angle = None
-        if imu2 and ENABLE_DUAL_IMU:
-            try:
-                gyro_data2 = imu2.get_gyro_data()
-                acc_data2 = imu2.get_accel_data()
-                angle1 = math.atan(acc_data['y']/acc_data['z']) * 180 / math.pi
-                angle2 = math.atan(acc_data2['y']/acc_data2['z']) * 180 / math.pi
-                avg_angle = (angle1 + angle2) / 2
-                angle = avg_angle  # 使用平均角度
-            except Exception as e:
-                print(f"Dual IMU error: {e}, falling back to single IMU")
-                if acc_data['z'] == 0:
-                    acc_data['z'] = 0.0001
-                angle = math.atan(acc_data['y']/acc_data['z']) * 180 / math.pi
-        else:
-            if acc_data['z'] == 0:
-                acc_data['z'] = 0.0001
-            angle = math.atan(acc_data['y']/acc_data['z']) * 180 / math.pi
-        
-        angular_velocity_x = math.radians(gyro_data['x'])
+        # 使用优化的双IMU数据处理
+        imu_data = process_dual_imu_data(imu, imu2, previous_angular_velocity_x, dt)
 
-        if dt > 0:
-            angular_acceleration_x = (angular_velocity_x - previous_angular_velocity_x) / dt
-        else:
-            angular_acceleration_x = 0.0
+        # 提取融合后的数据
+        angle = imu_data['angle']
+        angular_velocity_x = imu_data['angular_velocity']
+        angular_acceleration_x = imu_data['angular_acceleration']
+        sensor_status = imu_data['sensor_status']
+
+        # 更新历史值
         previous_angular_velocity_x = angular_velocity_x
+
+        '''# 记录传感器状态（用于故障诊断和显示）
+        if ENABLE_FAULT_DIAGNOSIS and fault_diagnosis:
+            # 更新故障诊断系统
+            pass '''
+
+        # 在输出中显示传感器状态
+        if sensor_status != 'DUAL_OK' and sensor_status != 'SINGLE_IMU1':
+            print(f"传感器状态: {sensor_status}")
+        previous_angular_velocity_x = angular_velocity_x
+        
          # 使用当前模式
         current_mode = param_manager.get_current_params()['mode']
         angle_low = param_manager.get_current_params()['angle_low']
         angle_high = param_manager.get_current_params()['angle_high']
         angle_capsized = param_manager.get_current_params()['angle_capsized']
-        
-        # PID控制逻辑（保持原有代码）
+        # 更新PID控制器的当前角度（用于自适应滤波）
+        if ENABLE_FILTER:
+            gyro_pid.set_current_angle(angle)
+            acc_pid.set_current_angle(angle)
+            angacc_pid.set_current_angle(angle)
+        # PID控制逻辑
         if current_mode:
             angle_abs = abs(angle)
             if angle_abs < angle_low:
@@ -446,20 +509,25 @@ def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter,param_m
         # 数据记录
         if data_logger.enabled:
             temp = imu.get_temp()
-            data_logger.log_data(current_time, gyro_data, acc_data, temp,
+            data_logger.log_data(current_time,  temp,
                                angle, math.degrees(angular_velocity_x), 
                                math.degrees(angular_acceleration_x),
                                pid_output, motor_pulse)
 
         # 绘图数据
+        # 使用新数据结构的绘图
         if plotter:
+            # 从imu_data中获取两个传感器的原始数据用于显示
+            angle1 = imu_data.get('angle1')
+            angle2 = imu_data.get('angle2')
+            
             plotter.record(current_time - control_start,
-                         angle,
-                         math.degrees(angular_velocity_x),
-                         pid_output,
-                         math.degrees(angular_acceleration_x),
-                         motor_pulse,
-                         angle1, angle2, avg_angle)
+                        angle,
+                        math.degrees(angular_velocity_x),
+                        pid_output,
+                        math.degrees(angular_acceleration_x),
+                        motor_pulse,
+                        angle1, angle2, angle)  # 注意：第三个角度参数现在是融合后的角度
 
         print(f"Angle: {angle:.3f} deg, "
               f"Angular Vel: {angular_velocity_x:.3f} rad/s, "
@@ -471,11 +539,14 @@ def _control_loop(pwm, imu, imu2, gyro_pid, acc_pid, angacc_pid, plotter,param_m
 
 def main():
     # 用户输入配置
-    global ENABLE_DUAL_IMU, ENABLE_DATA_LOGGING
-    
+    global ENABLE_DUAL_IMU, ENABLE_DATA_LOGGING,ENABLE_FILTER
+    # 滤波器启用选项
+    enable_filter = input("Enable adaptive filtering? (y/n): ").strip().lower()
+    ENABLE_FILTER = (enable_filter == 'y')
+    # 绘图器启用选项
     enable_logging = input("Enable IMU data logging? (y/n): ").strip().lower()
     ENABLE_DATA_LOGGING = (enable_logging == 'y')
-    
+    # 双IMU启用选项
     enable_dual_imu = input("Enable dual IMU? (y/n): ").strip().lower()  
     ENABLE_DUAL_IMU = (enable_dual_imu == 'y')
      # 初始化参数管理器
@@ -574,4 +645,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-# 保留原有的校准和稳定控制函数...
