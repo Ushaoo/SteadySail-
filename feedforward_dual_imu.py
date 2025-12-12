@@ -44,13 +44,17 @@ BIAS_UPDATE_RATE = 0.001  # 静止时零偏更新速度
 LEFT_THRUSTER = 3
 RIGHT_THRUSTER = 4
 
-# ==================== 物理参数（基于80kg船舶，60cm宽度）====================
+# ==================== 物理参数 ====================
 MASS = 80.0  # kg
 WIDTH = 0.6  # m
 INERTIA = MASS * (WIDTH / 2)**2 / 3  # 近似转动惯量 ≈2.4 kg·m²
 G = 9.81  # m/s²
 K_SELF = 100.0  # 自回中刚度系数（实验调谐）
 DT = 0.01  # 循环时间 s
+
+# ==================== FF / FB 调参 ====================
+FEEDFORWARD_PARAM = 0.28  # 前馈力矩缩放
+FEEDBACK_PARAM = 0.5  # PID反馈力矩缩放
 
 # ==================== 电机PWM参数 ====================
 BASE_PULSE = 1500  # 中性脉宽 (us)
@@ -692,7 +696,7 @@ def main():
             tau_pid = pid.compute(setpoint=0.0, measured=theta, omega_filtered=omega)
             
             # 总力矩 = 前馈 + PID反馈
-            tau_total = 0.28*tau_ff - 0.5*tau_pid
+            tau_total = FEEDFORWARD_PARAM * tau_ff - FEEDBACK_PARAM * tau_pid
             
             # 全系统死区：使用非线性插值平滑衰减输出
             # 计算角度和角速度的死区因子（0~1）
