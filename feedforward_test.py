@@ -18,6 +18,12 @@ except ImportError:
     plt = None
     FuncAnimation = None
 
+# 网络数据发送
+try:
+    from data_sender import DataSender
+except ImportError:
+    DataSender = None
+
 # ==================== 硬件接口 ====================
 from motor_test import PCA9685
 import mpu6050
@@ -31,6 +37,11 @@ PLOT_WINDOW_SEC = 5.0         # 绘图窗口时长（秒）
 PLOT_MAX_WINDOW_SEC = 30.0    # 最大窗口时长
 PLOT_SAMPLE_RATE_HZ = 50.0    # 绘图采样率（降低以提高性能）
 PLOT_UPDATE_INTERVAL = 50     # 绘图刷新间隔（ms），增大可提高性能
+
+# ==================== 网络发送配置 ====================
+ENABLE_DATA_SENDER = True     # 是否启用网络数据发送
+DATA_SENDER_IP = "255.255.255.255"  # 目标IP（广播或电脑IP）
+DATA_SENDER_PORT = 5005       # UDP端口
 
 # ==================== IMU 配置 ====================
 IMU1_INVERT_X = True
@@ -457,6 +468,9 @@ bangbang_protection = False    # 是否处于防护状态
 # 绘图器
 plotter = None
 
+# 数据发送器
+data_sender = None
+
 # IMU 和校准数据
 mpu6050_1 = None
 mpu6050_2 = None
@@ -717,6 +731,19 @@ def control_loop():
                 pwm_right                        # 右电机PWM
             )
         
+        # 11b. 网络数据发送
+        if data_sender is not None:
+            data_sender.record(
+                loop_start - control_start,     # 相对时间（秒）
+                roll_deg,                        # 角度（度）
+                np.degrees(omega_rad),           # 角速度（度/秒）
+                pwm_left,                        # 左电机PWM
+                pwm_right,                       # 右电机PWM
+                M_ff,                            # 前馈力矩
+                M_fb,                            # 反馈力矩
+                1.0 if bangbang_protection else 0.0  # 防护状态
+            )
+        
         # 12. 精确定时
         elapsed = time.time() - loop_start
         sleep_time = DT - elapsed
@@ -729,7 +756,7 @@ def control_loop():
 
 # ==================== 主程序 ====================
 def main():
-    global fusion, traj, pid_theta, pid_omega, running, pwm, plotter
+    global fusion, traj, pid_theta, pid_omega, running, pwm, plotter, data_sender
     global mpu6050_1, mpu6050_2, bias_g1, bias_a1, bias_g2, bias_a2
     
     print("=" * 50)
@@ -780,6 +807,19 @@ def main():
         plotter = None
         print("绘图器已禁用")
     
+    # 初始化数据发送器
+    if ENABLE_DATA_SENDER and DataSender is not None:
+        try:
+            data_sender = DataSender(DATA_SENDER_IP, DATA_SENDER_PORT)
+            data_sender.start()
+            print(f"数据发送器已启用: {DATA_SENDER_IP}:{DATA_SENDER_PORT}")
+        except Exception as e:
+            print(f"数据发送器初始化失败: {e}")
+            data_sender = None
+    else:
+        data_sender = None
+        print("数据发送器已禁用")
+    
     print("\n按 Enter 开始控制，按 Ctrl+C 停止...")
     input()
     
@@ -811,6 +851,11 @@ def main():
     time.sleep(0.5)
     running = False
     control_thread.join(timeout=2.0)
+    
+    # 停止数据发送器
+    if data_sender is not None:
+        data_sender.stop()
+        print("数据发送器已停止")
     
     # 安全停机
     stop_thrusters()
