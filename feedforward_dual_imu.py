@@ -14,7 +14,8 @@ import csv
 from datetime import datetime
 from math import sin, radians
 from collections import deque
-from threading import Thread, Event
+from threading import Thread, Event, Lock
+import json
 
 # 导入自定义模块
 from motor_test import PCA9685
@@ -22,6 +23,15 @@ import mpu6050
 
 # 导入数据发送器
 from data_sender import DataSender
+
+# 导入Web PID调节器
+try:
+    from web_pid_tuner import ParameterManager, WebPIDTuner, HAS_FLASK
+except ImportError:
+    HAS_FLASK = False
+    ParameterManager = None
+    WebPIDTuner = None
+    print("Warning: web_pid_tuner not available")
 
 # ==================== IMU 配置 ====================
 # 每个IMU的XYZ轴是否需要反向
@@ -45,6 +55,7 @@ LEFT_THRUSTER = 3
 RIGHT_THRUSTER = 4
 
 # ==================== 物理参数 ====================
+# ==================== 物理参数 ====================
 MASS = 80.0  # kg
 WIDTH = 0.6  # m
 INERTIA = MASS * (WIDTH / 2)**2 / 3  # 近似转动惯量 ≈2.4 kg·m²
@@ -52,6 +63,7 @@ G = 9.81  # m/s²
 K_SELF = 100.0  # 自回中刚度系数（实验调谐）
 DT = 0.01  # 循环时间 s
 
+# ==================== FF / FB 调参 ====================
 # ==================== FF / FB 调参 ====================
 FEEDFORWARD_PARAM = 0.28  # 前馈力矩缩放
 FEEDBACK_PARAM = 0.5  # PID反馈力矩缩放
@@ -73,6 +85,11 @@ OMEGA_DEADZONE = 3.0  # 角速度死区 (deg/s)
 # ==================== 数据发送配置 ====================
 ENABLE_DATA_SENDER = True  # 是否启用UDP数据发送
 
+# ==================== Web调参配置 ====================
+ENABLE_WEB_TUNER = True  # 是否启用Web PID调节器
+WEB_TUNER_PORT = 5000  # Web服务器端口
+WEB_TUNER_HOST = '0.0.0.0'  # Web服务器监听地址
+
 # ==================== 数据记录配置 ====================
 ENABLE_DATA_LOGGING = False  # 是否启用CSV数据记录（运行时询问）
 
@@ -82,9 +99,10 @@ I2C_RETRY_DELAY = 0.01    # 重试间隔 (秒)
 I2C_RESET_ON_FAIL = True  # 多次失败后是否尝试重置PCA9685
 
 # ==================== PID参数 ====================
+# ==================== PID参数 ====================
 PID_KP = 20.0   # 比例增益
-PID_KI = 1.0   # 积分增益
-PID_KD = 0.0   # 微分增益
+PID_KI = 1.0    # 积分增益
+PID_KD = 0.0    # 微分增益
 PID_B = 0.8     # 比例权重（2DOF）
 PID_C = 0.0     # 微分权重（2DOF，0抑制setpoint kick）
 
@@ -286,6 +304,37 @@ class DataLogger:
             print(f"数据写入错误: {e}")
 
 
+
+
+class ParameterSync:
+    """Web参数同步管理器"""
+    
+    def __init__(self, param_manager):
+        self.param_manager = param_manager
+        self.lock = Lock()
+        
+    def get_control_params(self):
+        """获取控制参数的快照"""
+        if self.param_manager is None:
+            return None
+            
+        params = self.param_manager.get_current_params()
+        return {
+            'pid_kp': params['pid']['kp'],
+            'pid_ki': params['pid']['ki'],
+            'pid_kd': params['pid']['kd'],
+            'feedforward_param': params.get('feedforward_param', FEEDFORWARD_PARAM),
+            'feedback_param': params.get('feedback_param', FEEDBACK_PARAM),
+            'mass': params.get('mass', MASS),
+            'width': params.get('width', WIDTH),
+            'angle_deadzone': params.get('angle_deadzone', ANGLE_DEADZONE),
+            'angle_deadzone_soft': params.get('angle_deadzone_soft', ANGLE_DEADZONE_SOFT),
+            'omega_deadzone_soft': params.get('omega_deadzone_soft', OMEGA_DEADZONE_SOFT),
+            'motor_left_invert': params.get('motor_left_invert', False),
+            'motor_right_invert': params.get('motor_right_invert', False),
+        }
+
+
 def apply_deadzone_smooth(value, deadzone_core, deadzone_soft):
     """
     非线性死区插值函数
@@ -328,6 +377,12 @@ class PID2DOF:
         self.dt = dt
         self.integral = 0.0
         self.prev_error = 0.0
+
+    def update_gains(self, Kp, Ki, Kd):
+        """动态更新PID增益"""
+        self.Kp = Kp
+        self.Ki = Ki
+        self.Kd = Kd
 
     def compute(self, setpoint, measured, omega_filtered):
         """计算PID输出
@@ -571,6 +626,45 @@ def main():
     enable_logging = input("是否启用数据记录? (y/n): ").strip().lower()
     ENABLE_DATA_LOGGING = (enable_logging == 'y')
     
+    # ==================== 初始化Web调参 ====================
+    param_manager = None
+    web_tuner = None
+    param_sync = None
+    
+    if ENABLE_WEB_TUNER and HAS_FLASK:
+        try:
+            param_manager = ParameterManager()
+            
+            # 初始化Web调参中的统一PID参数
+            param_manager.current_params['pid']['kp'] = PID_KP
+            param_manager.current_params['pid']['ki'] = PID_KI
+            param_manager.current_params['pid']['kd'] = PID_KD
+            # 添加前馈反馈参数
+            param_manager.current_params['feedforward_param'] = FEEDFORWARD_PARAM
+            param_manager.current_params['feedback_param'] = FEEDBACK_PARAM
+            # 添加物理参数
+            param_manager.current_params['mass'] = MASS
+            param_manager.current_params['width'] = WIDTH
+            # 添加死区参数
+            param_manager.current_params['angle_deadzone'] = ANGLE_DEADZONE
+            param_manager.current_params['angle_deadzone_soft'] = ANGLE_DEADZONE_SOFT
+            param_manager.current_params['omega_deadzone_soft'] = OMEGA_DEADZONE_SOFT
+            # 添加电机控制参数
+            param_manager.current_params['motor_left_invert'] = False
+            param_manager.current_params['motor_right_invert'] = False
+            
+            web_tuner = WebPIDTuner(param_manager, port=WEB_TUNER_PORT, host=WEB_TUNER_HOST)
+            web_tuner.start()
+            param_sync = ParameterSync(param_manager)
+            
+            print(f"Web PID调节器已启动: http://{WEB_TUNER_HOST}:{WEB_TUNER_PORT}")
+        except Exception as e:
+            print(f"Web调参初始化失败: {e}")
+            print("将继续使用配置文件中的参数运行")
+    elif ENABLE_WEB_TUNER and not HAS_FLASK:
+        print("Flask未安装，Web调参功能已禁用")
+        print("如需启用Web调参，请运行: pip install flask")
+    
     # ==================== 初始化硬件 ====================
     print("初始化PCA9685电机驱动...")
     pwm = PCA9685(address=0x40, debug=True, bus_num=1)
@@ -637,6 +731,35 @@ def main():
                 dt = current_time - prev_time
             prev_time = current_time
             
+            # 步骤0: 获取实时参数（如果启用Web调参）
+            current_feedforward = FEEDFORWARD_PARAM
+            current_feedback = FEEDBACK_PARAM
+            current_mass = MASS
+            current_width = WIDTH
+            current_angle_deadzone = ANGLE_DEADZONE
+            current_angle_deadzone_soft = ANGLE_DEADZONE_SOFT
+            current_omega_deadzone_soft = OMEGA_DEADZONE_SOFT
+            motor_left_invert = False
+            motor_right_invert = False
+            
+            if param_sync:
+                try:
+                    params = param_sync.get_control_params()
+                    if params:
+                        pid.update_gains(params['pid_kp'], params['pid_ki'], params['pid_kd'])
+                        current_feedforward = params['feedforward_param']
+                        current_feedback = params['feedback_param']
+                        current_mass = params.get('mass', MASS)
+                        current_width = params.get('width', WIDTH)
+                        current_angle_deadzone = params['angle_deadzone']
+                        current_angle_deadzone_soft = params['angle_deadzone_soft']
+                        current_omega_deadzone_soft = params['omega_deadzone_soft']
+                        motor_left_invert = params.get('motor_left_invert', False)
+                        motor_right_invert = params.get('motor_right_invert', False)
+                except Exception as e:
+                    print(f"参数同步错误: {e}")
+            print(f"\rKp={pid.Kp:.2f} Ki={pid.Ki:.4f} Kd={pid.Kd:.2f} | Feedforward={current_feedforward:.2f} Feedback={current_feedback:.2f}    ", end='')
+            print(current_mass, current_width, current_angle_deadzone)
             # 步骤1: 读取双IMU数据
             try:
                 accel_1, gyro_1, accel_2, gyro_2 = read_dual_imu(
@@ -669,7 +792,7 @@ def main():
             prev_filtered_omega = filtered_omega
             
             # 死区处理：小角速度使用非线性插值平滑过渡
-            omega = apply_deadzone_smooth(filtered_omega, OMEGA_DEADZONE, OMEGA_DEADZONE_SOFT)
+            omega = apply_deadzone_smooth(filtered_omega, OMEGA_DEADZONE, current_omega_deadzone_soft)
             
             # 如果角速度被衰减，角加速度也相应衰减
             if abs(filtered_omega) > 1e-6:
@@ -679,7 +802,7 @@ def main():
             alpha = alpha * omega_ratio
 
             # 步骤3: 估计扰动力矩
-            tau_disturb = MASS * G * (WIDTH / 2) * sin(radians(theta))
+            tau_disturb = current_mass * G * (current_width / 2) * sin(radians(theta))
 
             # 步骤4: 预测
             theta_pred = theta + omega * PRED_HORIZON + 0.5 * alpha * PRED_HORIZON**2
@@ -696,23 +819,23 @@ def main():
             tau_pid = pid.compute(setpoint=0.0, measured=theta, omega_filtered=omega)
             
             # 总力矩 = 前馈 + PID反馈
-            tau_total = FEEDFORWARD_PARAM * tau_ff - FEEDBACK_PARAM * tau_pid
+            tau_total = current_feedforward * tau_ff - current_feedback * tau_pid
             
             # 全系统死区：使用非线性插值平滑衰减输出
             # 计算角度和角速度的死区因子（0~1）
-            if abs(theta) < ANGLE_DEADZONE:
+            if abs(theta) < current_angle_deadzone:
                 angle_factor = 0.0
                 pid.reset()  # 在核心死区内清积分
-            elif abs(theta) < ANGLE_DEADZONE_SOFT:
-                t = (abs(theta) - ANGLE_DEADZONE) / (ANGLE_DEADZONE_SOFT - ANGLE_DEADZONE)
+            elif abs(theta) < current_angle_deadzone_soft:
+                t = (abs(theta) - current_angle_deadzone) / (current_angle_deadzone_soft - current_angle_deadzone)
                 angle_factor = t * t * (3 - 2 * t)  # smoothstep
             else:
                 angle_factor = 1.0
             
             if abs(omega) < OMEGA_DEADZONE:
                 omega_factor = 0.0
-            elif abs(omega) < OMEGA_DEADZONE_SOFT:
-                t = (abs(omega) - OMEGA_DEADZONE) / (OMEGA_DEADZONE_SOFT - OMEGA_DEADZONE)
+            elif abs(omega) < current_omega_deadzone_soft:
+                t = (abs(omega) - OMEGA_DEADZONE) / (current_omega_deadzone_soft - OMEGA_DEADZONE)
                 omega_factor = t * t * (3 - 2 * t)  # smoothstep
             else:
                 omega_factor = 1.0
@@ -735,12 +858,24 @@ def main():
             pulse_right = max(min(pulse_right, MAX_PULSE), MIN_PULSE)
 
             # 步骧8: 驱动电机（使用安全控制器）
-            motor_ctrl.set_both_motors(pulse_left, pulse_right, invert_left=True)
+            # 计算实际的PWM值，考虑Web Tuner中设置的反转标志
+            if motor_left_invert:
+                pwm_left_actual = 3000 - pulse_left
+            else:
+                pwm_left_actual = pulse_left
+            
+            if motor_right_invert:
+                pwm_right_actual = 3000 - pulse_right
+            else:
+                pwm_right_actual = pulse_right
+            
+            motor_ctrl.set_pulse(LEFT_THRUSTER, pwm_left_actual)
+            motor_ctrl.set_pulse(RIGHT_THRUSTER, pwm_right_actual)
             
             # 步骧9: 发送数据（如果启用）
             if data_sender:
                 timestamp = current_time - control_start
-                bangbang_protection = abs(theta) < ANGLE_DEADZONE and abs(omega) < OMEGA_DEADZONE
+                bangbang_protection = abs(theta) < current_angle_deadzone and abs(omega) < OMEGA_DEADZONE
                 data_sender.record(
                     timestamp=timestamp,
                     angle_deg=theta,
@@ -780,6 +915,13 @@ def main():
         status = motor_ctrl.get_status()
         if status['total_errors'] > 0:
             print(f"\nI2C通信统计: 总错误次数={status['total_errors']}")
+        
+        # 停止Web调参
+        if web_tuner:
+            try:
+                web_tuner.stop()
+            except Exception as e:
+                print(f"停止Web调参时出错: {e}")
         
         # 停止数据发送器
         if data_sender:

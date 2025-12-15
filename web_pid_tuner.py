@@ -26,15 +26,23 @@ class ParameterManager:
         self.parameter_history = deque(maxlen=1000)  # 参数变化历史
         self.presets = self.load_presets()
         
-        # 默认参数
+        # 默认参数 - 统一PID
         self.current_params = {
-            'gyro': {'kp': 294.0, 'ki': 0.08, 'kd': 0.0, 'target': 0.0},
-            'acc': {'kp': 29.0, 'ki': 0.000, 'kd': 0.008, 'target': 0.0},
-            'angacc': {'kp': 0.0, 'ki': 0.000, 'kd': 0.008, 'target': 0.0},
-            'mode': True,
-            'angle_low': 20,
-            'angle_high': 30,
-            'angle_capsized': 35
+            # 统一PID参数
+            'pid': {'kp': 20.0, 'ki': 1.0, 'kd': 0.0},
+            # 前馈/反馈参数
+            'feedforward_param': 0.28,
+            'feedback_param': 0.5,
+            # 物理参数
+            'mass': 80.0,
+            'width': 0.6,
+            # 死区参数
+            'angle_deadzone': 1.0,
+            'angle_deadzone_soft': 3.0,
+            'omega_deadzone_soft': 6.0,
+            # 电机控制参数
+            'motor_left_invert': False,  # 左电机是否反转
+            'motor_right_invert': False  # 右电机是否反转
         }
         
         # 回调函数，当参数变化时调用
@@ -49,19 +57,25 @@ class ParameterManager:
             # 默认预设
             return {
                 'default': {
-                    'gyro': {'kp': 294.0, 'ki': 0.08, 'kd': 0.0},
-                    'acc': {'kp': 29.0, 'ki': 0.000, 'kd': 0.008},
-                    'angacc': {'kp': 0.0, 'ki': 0.000, 'kd': 0.008}
+                    'pid': {'kp': 20.0, 'ki': 1.0, 'kd': 0.0},
+                    'feedforward_param': 0.28,
+                    'feedback_param': 0.5,
+                    'motor_left_invert': False,
+                    'motor_right_invert': False
                 },
                 'aggressive': {
-                    'gyro': {'kp': 400.0, 'ki': 0.1, 'kd': 0.0},
-                    'acc': {'kp': 40.0, 'ki': 0.001, 'kd': 0.01},
-                    'angacc': {'kp': 350.0, 'ki': 0.001, 'kd': 0.01}
+                    'pid': {'kp': 30.0, 'ki': 1.5, 'kd': 0.1},
+                    'feedforward_param': 0.35,
+                    'feedback_param': 0.6,
+                    'motor_left_invert': False,
+                    'motor_right_invert': False
                 },
                 'smooth': {
-                    'gyro': {'kp': 200.0, 'ki': 0.05, 'kd': 0.0},
-                    'acc': {'kp': 20.0, 'ki': 0.000, 'kd': 0.005},
-                    'angacc': {'kp': 250.0, 'ki': 0.000, 'kd': 0.005}
+                    'pid': {'kp': 15.0, 'ki': 0.8, 'kd': 0.05},
+                    'feedforward_param': 0.25,
+                    'feedback_param': 0.45,
+                    'motor_left_invert': False,
+                    'motor_right_invert': False
                 }
             }
     
@@ -73,19 +87,32 @@ class ParameterManager:
     def update_parameter(self, param_type, param_name, value):
         """更新参数并记录历史"""
         with self.lock:
-            # 转换数据类型
-            if param_type == 'mode':
+            # 转换数据类型 - 处理boolean类型参数
+            if param_type in ['motor_left_invert', 'motor_right_invert']:
+                # 处理boolean参数
+                if isinstance(value, str):
+                    value = value.lower() == 'true'
+                else:
+                    value = bool(value)
+            elif param_type == 'mode':
                 value = value.lower() == 'true' if isinstance(value, str) else bool(value)
             else:
                 value = float(value)
-                
-            old_value = self.current_params[param_type][param_name] if param_name != 'value' else self.current_params[param_type]
+            
+            # 获取旧值
+            if isinstance(self.current_params.get(param_type), dict):
+                old_value = self.current_params[param_type].get(param_name, None)
+            else:
+                old_value = self.current_params.get(param_type, None)
             
             # 更新参数
-            if param_name == 'value':
-                self.current_params[param_type] = value
-            else:
+            if isinstance(self.current_params.get(param_type), dict):
+                if param_type not in self.current_params:
+                    self.current_params[param_type] = {}
                 self.current_params[param_type][param_name] = value
+            else:
+                # 顶级参数直接更新
+                self.current_params[param_type] = value
             
             # 记录参数变化
             history_entry = {
@@ -273,67 +300,83 @@ class WebPIDTuner:
         </div>
 
         <div class="card">
-            <h2>Control Mode</h2>
-            <div>
-                <label>
-                    <input type="radio" name="mode" value="true" checked> Gyro+Accel PID
-                </label>
-                <label>
-                    <input type="radio" name="mode" value="false"> Angular Acceleration PID
-                </label>
-            </div>
-        </div>
-
-        <div class="card">
-            <h2>Gyro PID Parameters</h2>
+            <h2>PID Parameters (Unified)</h2>
             <div class="param-group">
                 <div class="param-item">
-                    <label>Kp: <span id="gyro-kp-value" class="value-display">294.0</span></label>
-                    <input type="range" id="gyro-kp" min="0" max="1000" step="0.1" value="294.0">
+                    <label>Kp: <span id="pid-kp-value" class="value-display">20.0</span></label>
+                    <input type="range" id="pid-kp" min="0" max="100" step="0.1" value="20.0">
                 </div>
                 <div class="param-item">
-                    <label>Ki: <span id="gyro-ki-value" class="value-display">0.08</span></label>
-                    <input type="range" id="gyro-ki" min="0" max="1" step="0.001" value="0.08">
+                    <label>Ki: <span id="pid-ki-value" class="value-display">1.0</span></label>
+                    <input type="range" id="pid-ki" min="0" max="10" step="0.1" value="1.0">
                 </div>
                 <div class="param-item">
-                    <label>Kd: <span id="gyro-kd-value" class="value-display">0.0</span></label>
-                    <input type="range" id="gyro-kd" min="0" max="10" step="0.001" value="0.0">
+                    <label>Kd: <span id="pid-kd-value" class="value-display">0.0</span></label>
+                    <input type="range" id="pid-kd" min="0" max="1" step="0.01" value="0.0">
                 </div>
             </div>
         </div>
 
         <div class="card">
-            <h2>Acceleration PID Parameters</h2>
+            <h2>Feedforward & Feedback Control</h2>
             <div class="param-group">
                 <div class="param-item">
-                    <label>Kp: <span id="acc-kp-value" class="value-display">29.0</span></label>
-                    <input type="range" id="acc-kp" min="0" max="100" step="0.1" value="29.0">
+                    <label>Feedforward Param: <span id="feedforward-param-value" class="value-display">0.28</span></label>
+                    <input type="range" id="feedforward-param" min="0" max="1" step="0.01" value="0.28">
                 </div>
                 <div class="param-item">
-                    <label>Ki: <span id="acc-ki-value" class="value-display">0.000</span></label>
-                    <input type="range" id="acc-ki" min="0" max="0.01" step="0.0001" value="0.000">
-                </div>
-                <div class="param-item">
-                    <label>Kd: <span id="acc-kd-value" class="value-display">0.008</span></label>
-                    <input type="range" id="acc-kd" min="0" max="0.1" step="0.001" value="0.008">
+                    <label>Feedback Param: <span id="feedback-param-value" class="value-display">0.50</span></label>
+                    <input type="range" id="feedback-param" min="0" max="1" step="0.01" value="0.50">
                 </div>
             </div>
         </div>
 
         <div class="card">
-            <h2>Angle Thresholds</h2>
+            <h2>Physical Parameters</h2>
             <div class="param-group">
                 <div class="param-item">
-                    <label>Low Angle: <span id="angle-low-value" class="value-display">5</span>°</label>
-                    <input type="range" id="angle-low" min="1" max="20" step="0.5" value="5">
+                    <label>Mass: <span id="mass-value" class="value-display">80.0</span> kg</label>
+                    <input type="range" id="mass" min="50" max="150" step="1" value="80.0">
                 </div>
                 <div class="param-item">
-                    <label>High Angle: <span id="angle-high-value" class="value-display">10</span>°</label>
-                    <input type="range" id="angle-high" min="5" max="30" step="0.5" value="10">
+                    <label>Width: <span id="width-value" class="value-display">0.6</span> m</label>
+                    <input type="range" id="width" min="0.3" max="1.0" step="0.05" value="0.6">
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Motor Control</h2>
+            <div class="param-group">
+                <div class="param-item">
+                    <label style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" id="motor-left-invert" style="width: auto; cursor: pointer;">
+                        <span>Left Motor Reverse (Normal: PWM = pulse_left, Reverse: PWM = 3000 - pulse_left)</span>
+                    </label>
                 </div>
                 <div class="param-item">
-                    <label>Capsized Angle: <span id="angle-capsized-value" class="value-display">35</span>°</label>
-                    <input type="range" id="angle-capsized" min="20" max="60" step="1" value="35">
+                    <label style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" id="motor-right-invert" style="width: auto; cursor: pointer;">
+                        <span>Right Motor Reverse (Normal: PWM = pulse_right, Reverse: PWM = 3000 - pulse_right)</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Deadzone Parameters</h2>
+            <div class="param-group">
+                <div class="param-item">
+                    <label>Angle Deadzone: <span id="angle-deadzone-value" class="value-display">1.0</span>°</label>
+                    <input type="range" id="angle-deadzone" min="0" max="5" step="0.1" value="1.0">
+                </div>
+                <div class="param-item">
+                    <label>Angle Deadzone Soft: <span id="angle-deadzone-soft-value" class="value-display">3.0</span>°</label>
+                    <input type="range" id="angle-deadzone-soft" min="0" max="10" step="0.1" value="3.0">
+                </div>
+                <div class="param-item">
+                    <label>Omega Deadzone: <span id="omega-deadzone-soft-value" class="value-display">6.0</span>°/s</label>
+                    <input type="range" id="omega-deadzone-soft" min="0" max="20" step="0.5" value="6.0">
                 </div>
             </div>
         </div>
@@ -389,24 +432,34 @@ class WebPIDTuner:
         
         // 更新滑块位置
         function updateSliders() {
-            // Gyro PID
-            setSliderValue('gyro-kp', currentParams.gyro.kp);
-            setSliderValue('gyro-ki', currentParams.gyro.ki);
-            setSliderValue('gyro-kd', currentParams.gyro.kd);
+            // Unified PID
+            setSliderValue('pid-kp', currentParams.pid.kp);
+            setSliderValue('pid-ki', currentParams.pid.ki);
+            setSliderValue('pid-kd', currentParams.pid.kd);
             
-            // Acc PID
-            setSliderValue('acc-kp', currentParams.acc.kp);
-            setSliderValue('acc-ki', currentParams.acc.ki);
-            setSliderValue('acc-kd', currentParams.acc.kd);
+            // Physical parameters
+            setSliderValue('mass', currentParams.mass);
+            setSliderValue('width', currentParams.width);
             
-            // Angle thresholds
-            setSliderValue('angle-low', currentParams.angle_low);
-            setSliderValue('angle-high', currentParams.angle_high);
-            setSliderValue('angle-capsized', currentParams.angle_capsized);
+            // Deadzone parameters
+            setSliderValue('angle-deadzone', currentParams.angle_deadzone);
+            setSliderValue('angle-deadzone-soft', currentParams.angle_deadzone_soft);
+            setSliderValue('omega-deadzone-soft', currentParams.omega_deadzone_soft);
             
-            // Mode
-            const modeValue = currentParams.mode.toString();
-            document.querySelector(`input[name="mode"][value="${modeValue}"]`).checked = true;
+            // Feedforward & Feedback parameters
+            setSliderValue('feedforward-param', currentParams.feedforward_param);
+            setSliderValue('feedback-param', currentParams.feedback_param);
+            
+            // Motor control parameters
+            setCheckboxValue('motor-left-invert', currentParams.motor_left_invert);
+            setCheckboxValue('motor-right-invert', currentParams.motor_right_invert);
+        }
+        
+        function setCheckboxValue(checkboxId, value) {
+            const checkbox = document.getElementById(checkboxId);
+            if (checkbox) {
+                checkbox.checked = value;
+            }
         }
         
         function setSliderValue(sliderId, value) {
@@ -433,6 +486,13 @@ class WebPIDTuner:
         
         // 设置事件监听器
         function setupEventListeners() {
+            // 电机控制复选框
+            document.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+                checkbox.addEventListener('change', function() {
+                    updateParameter(this.id, this.checked);
+                });
+            });
+            
             // PID参数滑块
             document.querySelectorAll('input[type="range"]').forEach(slider => {
                 slider.addEventListener('input', function() {
@@ -456,16 +516,18 @@ class WebPIDTuner:
             
             // 映射参数ID到类型和名称
             const paramMap = {
-                'gyro-kp': ['gyro', 'kp'],
-                'gyro-ki': ['gyro', 'ki'],
-                'gyro-kd': ['gyro', 'kd'],
-                'acc-kp': ['acc', 'kp'],
-                'acc-ki': ['acc', 'ki'],
-                'acc-kd': ['acc', 'kd'],
-                'angle-low': ['angle_low', 'value'],
-                'angle-high': ['angle_high', 'value'],
-                'angle-capsized': ['angle_capsized', 'value'],
-                'mode': ['mode', 'value']
+                'pid-kp': ['pid', 'kp'],
+                'pid-ki': ['pid', 'ki'],
+                'pid-kd': ['pid', 'kd'],
+                'mass': ['mass', 'value'],
+                'width': ['width', 'value'],
+                'angle-deadzone': ['angle_deadzone', 'value'],
+                'angle-deadzone-soft': ['angle_deadzone_soft', 'value'],
+                'omega-deadzone-soft': ['omega_deadzone_soft', 'value'],
+                'feedforward-param': ['feedforward_param', 'value'],
+                'feedback-param': ['feedback_param', 'value'],
+                'motor-left-invert': ['motor_left_invert', 'value'],
+                'motor-right-invert': ['motor_right_invert', 'value']
             };
             
             if (paramMap[paramId]) {
@@ -525,11 +587,11 @@ class WebPIDTuner:
                 return;
             }
             
-            // 只保存PID参数，不保存角度阈值和模式
+            // 只保存PID参数
             const presetParams = {
-                gyro: currentParams.gyro,
-                acc: currentParams.acc,
-                angacc: currentParams.angacc
+                pid: currentParams.pid,
+                feedforward_param: currentParams.feedforward_param,
+                feedback_param: currentParams.feedback_param
             };
             
             try {

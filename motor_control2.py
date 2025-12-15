@@ -47,8 +47,8 @@ angle_low = 5
 angle_high = 10
 angle_capsized = 35
 
-motor_channel_1 = 4
-motor_channel_2 = 5
+motor_channel_1 = 3
+motor_channel_2 = 4
 
 def load_calibrations():
     """加载两个IMU的校准参数"""

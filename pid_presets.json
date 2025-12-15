@@ -1,73 +1,35 @@
 {
   "default": {
-    "gyro": {
-      "kp": 294.0,
-      "ki": 0.08,
+    "pid": {
+      "kp": 20.0,
+      "ki": 1.0,
       "kd": 0.0
     },
-    "acc": {
-      "kp": 29.0,
-      "ki": 0.0,
-      "kd": 0.008
-    },
-    "angacc": {
-      "kp": 0.0,
-      "ki": 0.0,
-      "kd": 0.008
-    }
+    "feedforward_param": 0.28,
+    "feedback_param": 0.5,
+    "motor_left_invert": false,
+    "motor_right_invert": false
   },
   "aggressive": {
-    "gyro": {
-      "kp": 400.0,
-      "ki": 0.1,
-      "kd": 0.0
+    "pid": {
+      "kp": 30.0,
+      "ki": 1.5,
+      "kd": 0.1
     },
-    "acc": {
-      "kp": 40.0,
-      "ki": 0.001,
-      "kd": 0.01
-    },
-    "angacc": {
-      "kp": 350.0,
-      "ki": 0.001,
-      "kd": 0.01
-    }
+    "feedforward_param": 0.35,
+    "feedback_param": 0.6,
+    "motor_left_invert": false,
+    "motor_right_invert": false
   },
   "smooth": {
-    "gyro": {
-      "kp": 200.0,
-      "ki": 0.05,
-      "kd": 0.0
+    "pid": {
+      "kp": 15.0,
+      "ki": 0.8,
+      "kd": 0.05
     },
-    "acc": {
-      "kp": 20.0,
-      "ki": 0.0,
-      "kd": 0.005
-    },
-    "angacc": {
-      "kp": 250.0,
-      "ki": 0.0,
-      "kd": 0.005
-    }
-  },
-  "111": {
-    "gyro": {
-      "kd": 0,
-      "ki": 0.08,
-      "kp": 294,
-      "target": 0
-    },
-    "acc": {
-      "kd": 0.008,
-      "ki": 0,
-      "kp": 29,
-      "target": 0
-    },
-    "angacc": {
-      "kd": 0.008,
-      "ki": 0,
-      "kp": 0,
-      "target": 0
-    }
+    "feedforward_param": 0.20,
+    "feedback_param": 0.4,
+    "motor_left_invert": false,
+    "motor_right_invert": false
   }
 }
