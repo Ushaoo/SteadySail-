@@ -42,7 +42,8 @@ class ParameterManager:
             'omega_deadzone_soft': 6.0,
             # 电机控制参数
             'motor_left_invert': False,  # 左电机是否反转
-            'motor_right_invert': False  # 右电机是否反转
+            'motor_right_invert': False,  # 右电机是否反转
+            'thrust_scale': 0.55  # 力矩到PWM的缩放系数
         }
         
         # 回调函数，当参数变化时调用
@@ -349,6 +350,12 @@ class WebPIDTuner:
             <h2>Motor Control</h2>
             <div class="param-group">
                 <div class="param-item">
+                    <label>Thrust Scale: <span id="thrust-scale-value" class="value-display">0.55</span></label>
+                    <input type="range" id="thrust-scale" min="0" max="2" step="0.01" value="0.55">
+                </div>
+            </div>
+            <div class="param-group">
+                <div class="param-item">
                     <label style="display: flex; align-items: center; gap: 10px;">
                         <input type="checkbox" id="motor-left-invert" style="width: auto; cursor: pointer;">
                         <span>Left Motor Reverse (Normal: PWM = pulse_left, Reverse: PWM = 3000 - pulse_left)</span>
@@ -451,6 +458,7 @@ class WebPIDTuner:
             setSliderValue('feedback-param', currentParams.feedback_param);
             
             // Motor control parameters
+            setSliderValue('thrust-scale', currentParams.thrust_scale);
             setCheckboxValue('motor-left-invert', currentParams.motor_left_invert);
             setCheckboxValue('motor-right-invert', currentParams.motor_right_invert);
         }
@@ -526,6 +534,7 @@ class WebPIDTuner:
                 'omega-deadzone-soft': ['omega_deadzone_soft', 'value'],
                 'feedforward-param': ['feedforward_param', 'value'],
                 'feedback-param': ['feedback_param', 'value'],
+                'thrust-scale': ['thrust_scale', 'value'],
                 'motor-left-invert': ['motor_left_invert', 'value'],
                 'motor-right-invert': ['motor_right_invert', 'value']
             };

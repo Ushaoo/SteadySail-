@@ -332,6 +332,7 @@ class ParameterSync:
             'omega_deadzone_soft': params.get('omega_deadzone_soft', OMEGA_DEADZONE_SOFT),
             'motor_left_invert': params.get('motor_left_invert', False),
             'motor_right_invert': params.get('motor_right_invert', False),
+            'thrust_scale': params.get('thrust_scale', THRUST_SCALE),
         }
 
 
@@ -739,6 +740,7 @@ def main():
             current_angle_deadzone = ANGLE_DEADZONE
             current_angle_deadzone_soft = ANGLE_DEADZONE_SOFT
             current_omega_deadzone_soft = OMEGA_DEADZONE_SOFT
+            current_thrust_scale = THRUST_SCALE
             motor_left_invert = False
             motor_right_invert = False
             
@@ -754,6 +756,7 @@ def main():
                         current_angle_deadzone = params['angle_deadzone']
                         current_angle_deadzone_soft = params['angle_deadzone_soft']
                         current_omega_deadzone_soft = params['omega_deadzone_soft']
+                        current_thrust_scale = params.get('thrust_scale', THRUST_SCALE)
                         motor_left_invert = params.get('motor_left_invert', False)
                         motor_right_invert = params.get('motor_right_invert', False)
                 except Exception as e:
@@ -846,7 +849,7 @@ def main():
 
             # 步骤7: 映射到PWM脉宽
             # 力矩 -> PWM调整量（每边最大±500，即1000~2000全范围）
-            pwm_adjust = tau_total * THRUST_SCALE
+            pwm_adjust = tau_total * current_thrust_scale
             pwm_adjust = max(min(pwm_adjust, 500), -500)  # 限幅±500
             
             # 左右电机差动控制（正力矩 -> 左加右减）
