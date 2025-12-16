@@ -27,9 +27,27 @@
       "ki": 0.8,
       "kd": 0.05
     },
-    "feedforward_param": 0.20,
+    "feedforward_param": 0.2,
     "feedback_param": 0.4,
     "motor_left_invert": false,
     "motor_right_invert": false
+  },
+  "1": {
+    "pid": {
+      "kd": 0,
+      "ki": 1,
+      "kp": 20
+    },
+    "feedforward_param": 0.28,
+    "feedback_param": 0.5
+  },
+  "2": {
+    "pid": {
+      "kd": 0,
+      "ki": 1,
+      "kp": 20
+    },
+    "feedforward_param": 0.28,
+    "feedback_param": 0.5
   }
 }

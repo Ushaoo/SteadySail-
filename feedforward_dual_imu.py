@@ -51,8 +51,8 @@ WEIGHT_DYNAMIC = 0.8      # 动态时更信低噪声那颗
 BIAS_UPDATE_RATE = 0.001  # 静止时零偏更新速度
 
 # ==================== 电机通道定义 ====================
-LEFT_THRUSTER = 3
-RIGHT_THRUSTER = 4
+LEFT_THRUSTER = 12
+RIGHT_THRUSTER = 8
 
 # ==================== 物理参数 ====================
 # ==================== 物理参数 ====================
@@ -209,7 +209,7 @@ class DataLogger:
         self.start_time = None
         
     def start_logging(self, prefix="feedforward_dual_imu", params=None):
-        """开始记录数据，文件名中包含关键参数
+        """开始记录数据，文件名中包含所有关键参数
         
         Args:
             prefix: 文件名前缀
@@ -217,23 +217,40 @@ class DataLogger:
         """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # 如果提供了参数，在文件名中包含关键参数
+        # 如果提供了参数，在文件名中包含所有关键参数
         if params:
-            # 提取关键参数
+            # 提取所有参数
             kp = params.get('pid_kp', 0)
             ki = params.get('pid_ki', 0)
             kd = params.get('pid_kd', 0)
             ff = params.get('feedforward_param', 0)
             fb = params.get('feedback_param', 0)
-            deadzone = params.get('angle_deadzone', 0)
+            mass = params.get('mass', 0)
+            width = params.get('width', 0)
+            dz = params.get('angle_deadzone', 0)
+            dz_soft = params.get('angle_deadzone_soft', 0)
+            omega_dz = params.get('omega_deadzone_soft', 0)
             thrust = params.get('thrust_scale', 0)
+            motor_left_inv = params.get('motor_left_invert', False)
+            motor_right_inv = params.get('motor_right_invert', False)
             
-            # 构造参数字符串（使用简洁格式）
-            param_str = (
-                f"_Kp{kp:.1f}_Ki{ki:.3f}_Kd{kd:.1f}"
-                f"_FF{ff:.2f}_FB{fb:.2f}"
-                f"_DZ{deadzone:.1f}_TS{thrust:.2f}"
-            )
+            # 构造参数字符串（使用简洁格式，按调整频率分组）
+            # PID参数组
+            pid_str = f"Kp{kp:.1f}_Ki{ki:.3f}_Kd{kd:.1f}"
+            # 前馈反馈参数组
+            ctrl_str = f"FF{ff:.2f}_FB{fb:.2f}"
+            # 死区参数组
+            dz_str = f"DZ{dz:.1f}_{dz_soft:.1f}_ODZ{omega_dz:.1f}"
+            # 物理参数组
+            phys_str = f"M{mass:.0f}_W{width:.2f}"
+            # 电机参数组
+            motor_str = f"TS{thrust:.2f}"
+            if motor_left_inv or motor_right_inv:
+                motor_inv = f"_L{int(motor_left_inv)}R{int(motor_right_inv)}"
+            else:
+                motor_inv = ""
+            
+            param_str = f"_{pid_str}_{ctrl_str}_{dz_str}_{phys_str}_{motor_str}{motor_inv}"
             filename = f"{prefix}{param_str}_{timestamp}.csv"
         else:
             filename = f"{prefix}_{timestamp}.csv"
@@ -648,10 +665,6 @@ def main():
     """主函数"""
     global ENABLE_DATA_LOGGING
     
-    # ==================== 用户配置 ====================
-    enable_logging = input("是否启用数据记录? (y/n): ").strip().lower()
-    ENABLE_DATA_LOGGING = (enable_logging == 'y')
-    
     # ==================== 初始化Web调参 ====================
     param_manager = None
     web_tuner = None
@@ -726,15 +739,12 @@ def main():
     
     # ==================== 初始化数据记录器 ====================
     data_logger = DataLogger()
-    if ENABLE_DATA_LOGGING:
-        # 获取初始参数用于记录
-        initial_params = None
-        if param_sync:
-            try:
-                initial_params = param_sync.get_control_params()
-            except:
-                pass
-        data_logger.start_logging(params=initial_params)
+    
+    # 如果启用了Web调参，在param_manager中设置data_logger引用
+    if param_manager:
+        param_manager.set_data_logger(data_logger)
+        print("数据记录器已添加到Web调参管理器")
+        print("在Web界面中使用'Start Recording'按钮来启动数据记录")
     
     # ==================== 初始化安全电机控制器 ====================
     motor_ctrl = SafeMotorController(pwm)
@@ -895,14 +905,14 @@ def main():
             # 步骧8: 驱动电机（使用安全控制器）
             # 计算实际的PWM值，考虑Web Tuner中设置的反转标志
             if motor_left_invert:
-                pwm_left_actual = 3000 - pulse_left
-            else:
                 pwm_left_actual = pulse_left
+            else:
+                pwm_left_actual = 3000-pulse_left
             
             if motor_right_invert:
-                pwm_right_actual = 3000 - pulse_right
-            else:
                 pwm_right_actual = pulse_right
+            else:
+                pwm_right_actual = 3000 - pulse_right
             
             motor_ctrl.set_pulse(LEFT_THRUSTER, pwm_left_actual)
             motor_ctrl.set_pulse(RIGHT_THRUSTER, pwm_right_actual)

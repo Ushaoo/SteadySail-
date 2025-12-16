@@ -46,6 +46,10 @@ class ParameterManager:
             'thrust_scale': 0.55  # 力矩到PWM的缩放系数
         }
         
+        # 数据记录状态管理
+        self.data_logging_enabled = False
+        self.data_logger = None  # 引用，由主程序设置
+        
         # 回调函数，当参数变化时调用
         self.on_parameter_change = None
     
@@ -158,6 +162,95 @@ class ParameterManager:
     def set_parameter_change_callback(self, callback):
         """设置参数变化回调函数"""
         self.on_parameter_change = callback
+    
+    def set_data_logger(self, logger):
+        """由主程序设置DataLogger引用"""
+        self.data_logger = logger
+    
+    def start_data_logging(self):
+        """启动数据记录"""
+        if self.data_logger is None:
+            print("Error: data_logger not set")
+            return False
+        
+        with self.lock:
+            if self.data_logging_enabled:
+                print("Warning: data logging already enabled")
+                return False
+            
+            try:
+                # 获取当前参数供记录使用（不需要再次获得lock）
+                current_params = self.current_params.copy()
+                params = {
+                    'pid_kp': current_params['pid']['kp'],
+                    'pid_ki': current_params['pid']['ki'],
+                    'pid_kd': current_params['pid']['kd'],
+                    'feedforward_param': current_params.get('feedforward_param', 0.28),
+                    'feedback_param': current_params.get('feedback_param', 0.5),
+                    'mass': current_params.get('mass', 80.0),
+                    'width': current_params.get('width', 0.6),
+                    'angle_deadzone': current_params['angle_deadzone'],
+                    'angle_deadzone_soft': current_params['angle_deadzone_soft'],
+                    'omega_deadzone_soft': current_params['omega_deadzone_soft'],
+                    'motor_left_invert': current_params.get('motor_left_invert', False),
+                    'motor_right_invert': current_params.get('motor_right_invert', False),
+                    'thrust_scale': current_params.get('thrust_scale', 0.55),
+                }
+                self.data_logger.start_logging(params=params)
+                self.data_logging_enabled = True
+                print("Data logging started successfully")
+                return True
+            except Exception as e:
+                print(f"启动数据记录失败: {e}")
+                import traceback
+                traceback.print_exc()
+                return False
+    
+    def stop_data_logging(self):
+        """停止数据记录"""
+        if self.data_logger is None:
+            print("Error: data_logger not set")
+            return False
+        
+        with self.lock:
+            if not self.data_logging_enabled:
+                print("Warning: data logging not enabled")
+                return False
+            
+            try:
+                self.data_logger.stop_logging()
+                self.data_logging_enabled = False
+                print("Data logging stopped successfully")
+                return True
+            except Exception as e:
+                print(f"停止数据记录失败: {e}")
+                import traceback
+                traceback.print_exc()
+                return False
+    
+    def is_data_logging_enabled(self):
+        """获取数据记录状态"""
+        with self.lock:
+            return self.data_logging_enabled
+    
+    def get_control_params(self):
+        """获取用于控制系统的参数（与feedforward_dual_imu.py中的ParameterSync兼容）"""
+        params = self.get_current_params()
+        return {
+            'pid_kp': params['pid']['kp'],
+            'pid_ki': params['pid']['ki'],
+            'pid_kd': params['pid']['kd'],
+            'feedforward_param': params.get('feedforward_param', 0.28),
+            'feedback_param': params.get('feedback_param', 0.5),
+            'mass': params.get('mass', 80.0),
+            'width': params.get('width', 0.6),
+            'angle_deadzone': params['angle_deadzone'],
+            'angle_deadzone_soft': params['angle_deadzone_soft'],
+            'omega_deadzone_soft': params['omega_deadzone_soft'],
+            'motor_left_invert': params.get('motor_left_invert', False),
+            'motor_right_invert': params.get('motor_right_invert', False),
+            'thrust_scale': params.get('thrust_scale', 0.55),
+        }
 
 class WebPIDTuner:
     """
@@ -255,9 +348,34 @@ class WebPIDTuner:
             status = {
                 'running': self.running,
                 'timestamp': time.time(),
-                'web_interface': 'active'
+                'web_interface': 'active',
+                'data_logging': self.param_manager.is_data_logging_enabled()
             }
             return jsonify(status)
+        
+        @self.app.route('/api/data-logging/start', methods=['POST'])
+        def start_logging():
+            """启动数据记录"""
+            if self.param_manager.start_data_logging():
+                return jsonify({'success': True, 'message': '数据记录已启动'})
+            else:
+                return jsonify({'error': '数据记录启动失败或已运行'}), 400
+        
+        @self.app.route('/api/data-logging/stop', methods=['POST'])
+        def stop_logging():
+            """停止数据记录"""
+            if self.param_manager.stop_data_logging():
+                return jsonify({'success': True, 'message': '数据记录已停止'})
+            else:
+                return jsonify({'error': '数据记录停止失败'}), 400
+        
+        @self.app.route('/api/data-logging/status', methods=['GET'])
+        def logging_status():
+            """获取数据记录状态"""
+            return jsonify({
+                'enabled': self.param_manager.is_data_logging_enabled(),
+                'timestamp': time.time()
+            })
     
     def get_web_interface(self):
         """返回Web界面HTML"""
@@ -297,6 +415,13 @@ class WebPIDTuner:
             <div id="system-status">
                 <span class="status-indicator status-online"></span>
                 <span>Web Interface Active</span>
+            </div>
+            <div style="margin-top: 15px;">
+                <p><strong>Data Logging Status:</strong> <span id="logging-status-text" style="color: #dc3545;">Disabled</span></p>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn-success" onclick="startDataLogging()">Start Recording</button>
+                    <button class="btn-danger" onclick="stopDataLogging()">Stop Recording</button>
+                </div>
             </div>
         </div>
 
@@ -670,13 +795,89 @@ class WebPIDTuner:
             }
         }
         
+        // 启动数据记录
+        async function startDataLogging() {
+            try {
+                const response = await fetch('/api/data-logging/start', {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log(data.message);
+                    updateLoggingStatus();
+                } else {
+                    const error = await response.json();
+                    alert(`Error: ${error.error}`);
+                }
+            } catch (error) {
+                console.error('Error starting data logging:', error);
+                alert('Failed to start data logging');
+            }
+        }
+        
+        // 停止数据记录
+        async function stopDataLogging() {
+            try {
+                const response = await fetch('/api/data-logging/stop', {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    console.log(data.message);
+                    updateLoggingStatus();
+                } else {
+                    const error = await response.json();
+                    alert(`Error: ${error.error}`);
+                }
+            } catch (error) {
+                console.error('Error stopping data logging:', error);
+                alert('Failed to stop data logging');
+            }
+        }
+        
+        // 更新数据记录状态显示
+        async function updateLoggingStatus() {
+            try {
+                const response = await fetch('/api/data-logging/status');
+                const status = await response.json();
+                
+                const statusText = document.getElementById('logging-status-text');
+                if (statusText) {
+                    if (status.enabled) {
+                        statusText.textContent = 'Recording...';
+                        statusText.style.color = '#28a745';
+                    } else {
+                        statusText.textContent = 'Disabled';
+                        statusText.style.color = '#dc3545';
+                    }
+                }
+            } catch (error) {
+                console.error('Error updating logging status:', error);
+            }
+        }
+        
         // 开始状态更新
         function startStatusUpdates() {
+            // 初始化时更新一次
+            updateLoggingStatus();
+            
             setInterval(async () => {
                 try {
                     const response = await fetch('/api/system/status');
                     const status = await response.json();
-                    // 可以在这里更新状态指示器
+                    // 更新数据记录状态
+                    const statusText = document.getElementById('logging-status-text');
+                    if (statusText) {
+                        if (status.data_logging) {
+                            statusText.textContent = 'Recording...';
+                            statusText.style.color = '#28a745';
+                        } else {
+                            statusText.textContent = 'Disabled';
+                            statusText.style.color = '#dc3545';
+                        }
+                    }
                 } catch (error) {
                     console.error('Error updating status:', error);
                 }

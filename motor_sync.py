@@ -4,7 +4,7 @@ import time
 import math
 
 mode = 4
-motor_channels = [0, 1, 2, 3, 4, 5, 6]
+motor_channels = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 
 motor_channel_1 = 0
 motor_channel_2 = 1
@@ -106,8 +106,8 @@ try:
     if mode == 4:
         while True:
             for i in range(1000, 2100, 100):
-                pwm.setServoPulse(3, 3000 - i)
-                pwm.setServoPulse(4, i)
+                for ch in motor_channels:
+                    pwm.setServoPulse(ch, i)
                 print(f"Set all motors to {i} us")
                 time.sleep(1)
 
