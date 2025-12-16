@@ -1,0 +1,146 @@
+{
+  "feedforward_dual_imu_20251212_205348": {
+    "roll": {
+      "mean_roll": 0.8577404408735065,
+      "std_roll": 4.119646978672036,
+      "min_roll": -9.6801,
+      "max_roll": 10.7159,
+      "roll_range": 20.396,
+      "abs_mean_roll": 3.522990008240627,
+      "rms_roll": 4.207993570906628
+    },
+    "omega": {
+      "mean_omega": 0.21572142562834787,
+      "std_omega": 9.633012213523152,
+      "max_omega": 34.415,
+      "rms_omega": 9.635427340775362
+    },
+    "accel": {
+      "mean_accel": 9.368507434826208e-17,
+      "std_accel": 101.13338030821947,
+      "max_accel": 610.9,
+      "rms_accel": 101.13338030821947
+    },
+    "frequency": {
+      "dominant_freq": 0.494539460127756,
+      "low_freq_ratio": 0.5630948583659876,
+      "mid_freq_ratio": 0.4080402728016621,
+      "high_freq_ratio": 0.028864868832350316
+    },
+    "pwm": {
+      "mean_pwm_left": 1519.2074577667902,
+      "mean_pwm_right": 1479.846930366708,
+      "std_pwm_left": 102.37149892794474,
+      "std_pwm_right": 102.38195416367566,
+      "pwm_sync_error": 163.33868974042028
+    }
+  },
+  "feedforward_dual_imu_20251212_205606": {
+    "roll": {
+      "mean_roll": 1.4141523569522678,
+      "std_roll": 4.077667262770259,
+      "min_roll": -10.867,
+      "max_roll": 10.1058,
+      "roll_range": 20.9728,
+      "abs_mean_roll": 3.67194713904536,
+      "rms_roll": 4.315923678025592
+    },
+    "omega": {
+      "mean_omega": -0.7324326712125705,
+      "std_omega": 8.042230925339664,
+      "max_omega": 30.6374,
+      "rms_omega": 8.075514588826476
+    },
+    "accel": {
+      "mean_accel": -0.03834716869255802,
+      "std_accel": 80.2376416036129,
+      "max_accel": 496.86,
+      "rms_accel": 80.23765076705062
+    },
+    "frequency": {
+      "dominant_freq": 0.5634638196915778,
+      "low_freq_ratio": 0.5110831006754304,
+      "mid_freq_ratio": 0.4714938198840105,
+      "high_freq_ratio": 0.017423079440559035
+    },
+    "pwm": {
+      "mean_pwm_left": 1532.718055143789,
+      "mean_pwm_right": 1466.3083308627336,
+      "std_pwm_left": 99.43836482556546,
+      "std_pwm_right": 99.44717535757506,
+      "pwm_sync_error": 169.62881707678625
+    }
+  },
+  "feedforward_dual_imu_20251212_205732": {
+    "roll": {
+      "mean_roll": 2.3372336475023565,
+      "std_roll": 4.221832834870173,
+      "min_roll": -9.7602,
+      "max_roll": 11.1947,
+      "roll_range": 20.9549,
+      "abs_mean_roll": 4.227646654099907,
+      "rms_roll": 4.825612252202314
+    },
+    "omega": {
+      "mean_omega": 0.47354288407163053,
+      "std_omega": 9.200161973642736,
+      "max_omega": 26.3554,
+      "rms_omega": 9.212340810256462
+    },
+    "accel": {
+      "mean_accel": 0.03334118755890658,
+      "std_accel": 94.18242606346118,
+      "max_accel": 461.66499999999996,
+      "rms_accel": 94.18243196495894
+    },
+    "frequency": {
+      "dominant_freq": 0.5660377358490567,
+      "low_freq_ratio": 0.42872403798168085,
+      "mid_freq_ratio": 0.5396307824959496,
+      "high_freq_ratio": 0.031645179522369504
+    },
+    "pwm": {
+      "mean_pwm_left": 1553.7012252591894,
+      "mean_pwm_right": 1445.3204524033931,
+      "std_pwm_left": 105.90319005094334,
+      "std_pwm_right": 105.91428187355385,
+      "pwm_sync_error": 204.72761545711592
+    }
+  },
+  "feedforward_dual_imu_20251213_181510": {
+    "roll": {
+      "mean_roll": -0.30586002204666546,
+      "std_roll": 2.5345092032399976,
+      "min_roll": -8.4566,
+      "max_roll": 10.8358,
+      "roll_range": 19.2924,
+      "abs_mean_roll": 1.865171908873783,
+      "rms_roll": 2.5528978151102395
+    },
+    "omega": {
+      "mean_omega": -0.18374207238655152,
+      "std_omega": 3.283171691634903,
+      "max_omega": 17.2074,
+      "rms_omega": 3.2883092168951653
+    },
+    "accel": {
+      "mean_accel": 1.0443398651627414e-16,
+      "std_accel": 53.51312232515113,
+      "max_accel": 385.135,
+      "rms_accel": 53.51312232515113
+    },
+    "frequency": {
+      "dominant_freq": 0.12862918044836458,
+      "low_freq_ratio": 0.7390425334270315,
+      "mid_freq_ratio": 0.21930351341417031,
+      "high_freq_ratio": 0.04165395315879821
+    },
+    "pwm": {
+      "mean_pwm_left": NaN,
+      "mean_pwm_right": NaN,
+      "std_pwm_left": NaN,
+      "std_pwm_right": NaN,
+      "pwm_sync_error": NaN
+    }
+  }
+}

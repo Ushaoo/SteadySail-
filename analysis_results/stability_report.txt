@@ -1,0 +1,167 @@
+====================================================================================================
+SYSTEM STABILITY ANALYSIS REPORT
+Motor Control System for Roll Angle Reduction
+Generated: 2025-12-16 17:05:27
+====================================================================================================
+
+SUMMARY TABLE
+----------------------------------------------------------------------------------------------------
+Test File                                Roll Mean    Roll Std     Roll Range   Omega Max   
+----------------------------------------------------------------------------------------------------
+feedforward_dual_imu_20251212_205348     0.858        4.120        20.396       34.415      
+feedforward_dual_imu_20251212_205606     1.414        4.078        20.973       30.637      
+feedforward_dual_imu_20251212_205732     2.337        4.222        20.955       26.355      
+feedforward_dual_imu_20251213_181510     -0.306       2.535        19.292       17.207      
+
+====================================================================================================
+DETAILED ANALYSIS
+====================================================================================================
+
+
+feedforward_dual_imu_20251212_205348
+----------------------------------------------------------------------------------------------------
+
+[ROLL ANGLE METRICS]
+  mean_roll                     :       0.8577°
+  std_roll                      :       4.1196°
+  min_roll                      :      -9.6801°
+  max_roll                      :      10.7159°
+  roll_range                    :      20.3960°
+  abs_mean_roll                 :       3.5230°
+  rms_roll                      :       4.2080°
+
+[ANGULAR VELOCITY METRICS]
+  mean_omega                    :       0.2157°/s
+  std_omega                     :       9.6330°/s
+  max_omega                     :      34.4150°/s
+  rms_omega                     :       9.6354°/s
+
+[ANGULAR ACCELERATION METRICS]
+  mean_accel                    :       0.0000°/s²
+  std_accel                     :     101.1334°/s²
+  max_accel                     :     610.9000°/s²
+  rms_accel                     :     101.1334°/s²
+
+[FREQUENCY DOMAIN ANALYSIS]
+  dominant_freq                 :       0.4945 Hz
+  low_freq_ratio                :       56.31%
+  mid_freq_ratio                :       40.80%
+  high_freq_ratio               :        2.89%
+
+[PWM OUTPUT ANALYSIS]
+  mean_pwm_left                 :    1519.2075 us
+  mean_pwm_right                :    1479.8469 us
+  std_pwm_left                  :     102.3715 us
+  std_pwm_right                 :     102.3820 us
+  pwm_sync_error                :     163.3387 us
+
+feedforward_dual_imu_20251212_205606
+----------------------------------------------------------------------------------------------------
+
+[ROLL ANGLE METRICS]
+  mean_roll                     :       1.4142°
+  std_roll                      :       4.0777°
+  min_roll                      :     -10.8670°
+  max_roll                      :      10.1058°
+  roll_range                    :      20.9728°
+  abs_mean_roll                 :       3.6719°
+  rms_roll                      :       4.3159°
+
+[ANGULAR VELOCITY METRICS]
+  mean_omega                    :      -0.7324°/s
+  std_omega                     :       8.0422°/s
+  max_omega                     :      30.6374°/s
+  rms_omega                     :       8.0755°/s
+
+[ANGULAR ACCELERATION METRICS]
+  mean_accel                    :      -0.0383°/s²
+  std_accel                     :      80.2376°/s²
+  max_accel                     :     496.8600°/s²
+  rms_accel                     :      80.2377°/s²
+
+[FREQUENCY DOMAIN ANALYSIS]
+  dominant_freq                 :       0.5635 Hz
+  low_freq_ratio                :       51.11%
+  mid_freq_ratio                :       47.15%
+  high_freq_ratio               :        1.74%
+
+[PWM OUTPUT ANALYSIS]
+  mean_pwm_left                 :    1532.7181 us
+  mean_pwm_right                :    1466.3083 us
+  std_pwm_left                  :      99.4384 us
+  std_pwm_right                 :      99.4472 us
+  pwm_sync_error                :     169.6288 us
+
+feedforward_dual_imu_20251212_205732
+----------------------------------------------------------------------------------------------------
+
+[ROLL ANGLE METRICS]
+  mean_roll                     :       2.3372°
+  std_roll                      :       4.2218°
+  min_roll                      :      -9.7602°
+  max_roll                      :      11.1947°
+  roll_range                    :      20.9549°
+  abs_mean_roll                 :       4.2276°
+  rms_roll                      :       4.8256°
+
+[ANGULAR VELOCITY METRICS]
+  mean_omega                    :       0.4735°/s
+  std_omega                     :       9.2002°/s
+  max_omega                     :      26.3554°/s
+  rms_omega                     :       9.2123°/s
+
+[ANGULAR ACCELERATION METRICS]
+  mean_accel                    :       0.0333°/s²
+  std_accel                     :      94.1824°/s²
+  max_accel                     :     461.6650°/s²
+  rms_accel                     :      94.1824°/s²
+
+[FREQUENCY DOMAIN ANALYSIS]
+  dominant_freq                 :       0.5660 Hz
+  low_freq_ratio                :       42.87%
+  mid_freq_ratio                :       53.96%
+  high_freq_ratio               :        3.16%
+
+[PWM OUTPUT ANALYSIS]
+  mean_pwm_left                 :    1553.7012 us
+  mean_pwm_right                :    1445.3205 us
+  std_pwm_left                  :     105.9032 us
+  std_pwm_right                 :     105.9143 us
+  pwm_sync_error                :     204.7276 us
+
+feedforward_dual_imu_20251213_181510
+----------------------------------------------------------------------------------------------------
+
+[ROLL ANGLE METRICS]
+  mean_roll                     :      -0.3059°
+  std_roll                      :       2.5345°
+  min_roll                      :      -8.4566°
+  max_roll                      :      10.8358°
+  roll_range                    :      19.2924°
+  abs_mean_roll                 :       1.8652°
+  rms_roll                      :       2.5529°
+
+[ANGULAR VELOCITY METRICS]
+  mean_omega                    :      -0.1837°/s
+  std_omega                     :       3.2832°/s
+  max_omega                     :      17.2074°/s
+  rms_omega                     :       3.2883°/s
+
+[ANGULAR ACCELERATION METRICS]
+  mean_accel                    :       0.0000°/s²
+  std_accel                     :      53.5131°/s²
+  max_accel                     :     385.1350°/s²
+  rms_accel                     :      53.5131°/s²
+
+[FREQUENCY DOMAIN ANALYSIS]
+  dominant_freq                 :       0.1286 Hz
+  low_freq_ratio                :       73.90%
+  mid_freq_ratio                :       21.93%
+  high_freq_ratio               :        4.17%
+
+[PWM OUTPUT ANALYSIS]
+  mean_pwm_left                 :          nan us
+  mean_pwm_right                :          nan us
+  std_pwm_left                  :          nan us
+  std_pwm_right                 :          nan us
+  pwm_sync_error                :          nan us

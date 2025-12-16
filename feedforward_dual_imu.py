@@ -208,10 +208,35 @@ class DataLogger:
         self.sample_count = 0
         self.start_time = None
         
-    def start_logging(self, prefix="feedforward_dual_imu"):
-        """开始记录数据"""
+    def start_logging(self, prefix="feedforward_dual_imu", params=None):
+        """开始记录数据，文件名中包含关键参数
+        
+        Args:
+            prefix: 文件名前缀
+            params: 参数字典，包含 PID、前馈、反馈等参数
+        """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{prefix}_{timestamp}.csv"
+        
+        # 如果提供了参数，在文件名中包含关键参数
+        if params:
+            # 提取关键参数
+            kp = params.get('pid_kp', 0)
+            ki = params.get('pid_ki', 0)
+            kd = params.get('pid_kd', 0)
+            ff = params.get('feedforward_param', 0)
+            fb = params.get('feedback_param', 0)
+            deadzone = params.get('angle_deadzone', 0)
+            thrust = params.get('thrust_scale', 0)
+            
+            # 构造参数字符串（使用简洁格式）
+            param_str = (
+                f"_Kp{kp:.1f}_Ki{ki:.3f}_Kd{kd:.1f}"
+                f"_FF{ff:.2f}_FB{fb:.2f}"
+                f"_DZ{deadzone:.1f}_TS{thrust:.2f}"
+            )
+            filename = f"{prefix}{param_str}_{timestamp}.csv"
+        else:
+            filename = f"{prefix}_{timestamp}.csv"
         
         try:
             self.file = open(filename, 'w', newline='')
@@ -702,7 +727,14 @@ def main():
     # ==================== 初始化数据记录器 ====================
     data_logger = DataLogger()
     if ENABLE_DATA_LOGGING:
-        data_logger.start_logging()
+        # 获取初始参数用于记录
+        initial_params = None
+        if param_sync:
+            try:
+                initial_params = param_sync.get_control_params()
+            except:
+                pass
+        data_logger.start_logging(params=initial_params)
     
     # ==================== 初始化安全电机控制器 ====================
     motor_ctrl = SafeMotorController(pwm)
