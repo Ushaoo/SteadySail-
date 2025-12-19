@@ -49,5 +49,23 @@
     },
     "feedforward_param": 0.28,
     "feedback_param": 0.5
+  },
+  "111": {
+    "pid": {
+      "kd": 0,
+      "ki": 1,
+      "kp": 20
+    },
+    "feedforward_param": 0.28,
+    "feedback_param": 0.5
+  },
+  "final": {
+    "pid": {
+      "kd": 0,
+      "ki": 1,
+      "kp": 20
+    },
+    "feedforward_param": 0.28,
+    "feedback_param": 0.5
   }
 }
