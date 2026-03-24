@@ -235,6 +235,290 @@ class DualIMUFusion:
         self.q3 = sy * cp * cr - cy * sp * sr
 
 
+class ThrusterRotationController:
+    """推进器旋转控制器 - 阶段1.1
+    
+    功能：根据平衡需求转矩计算推进器旋转角
+    当前模式：旋转功能框架，推进器暂时保持竖直（θ=0）
+    
+    硬件假设：
+    - 推进器通过舵机旋转，使用 PCA9685 独立通道
+    - LEFT_ROTATION_SERVO / RIGHT_ROTATION_SERVO 通道
+    - 旋转范围：±45° （脉宽 1000-2000μs 对应 -45 到 +45°）
+    """
+    
+    def __init__(self, pwm, enabled=False):
+        """初始化旋转控制器
+        
+        Args:
+            pwm: PCA9685 对象
+            enabled: 是否启用旋转功能（默认关闭，用于向后兼容）
+        """
+        self.pwm = pwm
+        self.enabled = enabled
+        
+        # 推进器配置参数
+        self.max_rotation_angle = 45.0      # 最大旋转角度 (度)
+        self.rotation_pulse_min = 1000      # 对应 -45°
+        self.rotation_pulse_max = 2000      # 对应 +45°
+        self.rotation_pulse_center = 1500   # 对应 0° (竖直)
+        
+        # 旋转舵机通道 (PCA9685 通道)
+        # 假设 0-1 是推力ESC, 2-3 是旋转舵机
+        self.left_rotation_channel = 2
+        self.right_rotation_channel = 3
+        
+        # 船舶物理参数
+        self.thruster_distance = WIDTH      # 推进器间距 (m)
+        self.max_thrust_force = 50.0        # 最大推力 (N) - 需要根据实际标定
+        
+        # 状态存储
+        self.last_rotation_left = 0.0
+        self.last_rotation_right = 0.0
+        self.rotation_rate_limit = 90.0     # 旋转速率限制 (deg/s) - 防止过快驱动
+        self.last_update_time = time.time()
+        
+        if self.enabled:
+            print("✓ 推进器旋转控制器已启用（框架模式）")
+        else:
+            print("⚠ 推进器旋转控制器已禁用（保持向后兼容）")
+    
+    def torque_to_angle(self, tau_total):
+        """[阶段1.2] 根据所需转矩计算旋转角
+        
+        物理模型：τ = F × r × sin(θ)
+        其中 F 为推力，r 为推进器间距，θ 为旋转角
+        
+        当前阶段：仅返回框架，不实际使用
+        """
+        if not self.enabled:
+            return 0.0
+        
+        # 简化假设：使用最大推力计算理论旋转角
+        # 实际应用时需要根据当前推力 F_actual 动态计算
+        if abs(tau_total) < 1e-6:
+            return 0.0
+        
+        # τ = F × (r/2) × sin(θ) × 2 (两个推进器)
+        # θ = arcsin(τ / (F × r))
+        try:
+            sin_theta = tau_total / (self.max_thrust_force * self.thruster_distance)
+            # 限制在 [-1, 1] 范围内
+            sin_theta = max(-1.0, min(1.0, sin_theta))
+            angle_rad = math.asin(sin_theta)
+            angle_deg = math.degrees(angle_rad)
+            
+            # 限制在最大旋转角范围
+            angle_deg = max(-self.max_rotation_angle, min(self.max_rotation_angle, angle_deg))
+            return angle_deg
+        except:
+            return 0.0
+    
+    def angle_to_pulse(self, angle_deg):
+        """将旋转角 (度) 转换为 PWM 脉宽 (μs)
+        
+        线性映射：-45° ↔ 1000μs, 0° ↔ 1500μs, +45° ↔ 2000μs
+        """
+        # 限制角度范围
+        angle_deg = max(-self.max_rotation_angle, min(self.max_rotation_angle, angle_deg))
+        
+        # 线性插值
+        pulse = self.rotation_pulse_center + (angle_deg / self.max_rotation_angle) * 500
+        return int(pulse)
+    
+    def set_rotation_angle(self, angle_left, angle_right):
+        """设置推进器旋转角度（度）
+        
+        Args:
+            angle_left: 左推进器旋转角 (-45 ~ +45°)
+            angle_right: 右推进器旋转角 (-45 ~ +45°)
+        
+        Returns:
+            success: 是否成功设置
+        """
+        if not self.enabled or not self.pwm:
+            return False
+        
+        try:
+            # 应用旋转速率限制 (防止舵机突变)
+            current_time = time.time()
+            dt = current_time - self.last_update_time
+            if dt > 0:
+                max_delta = self.rotation_rate_limit * dt
+                angle_left = max(
+                    self.last_rotation_left - max_delta,
+                    min(self.last_rotation_left + max_delta, angle_left)
+                )
+                angle_right = max(
+                    self.last_rotation_right - max_delta,
+                    min(self.last_rotation_right + max_delta, angle_right)
+                )
+            
+            # 转换为 PWM 脉宽
+            pulse_left = self.angle_to_pulse(angle_left)
+            pulse_right = self.angle_to_pulse(angle_right)
+            
+            # 设置 PWM
+            self.pwm.setServoPulse(self.left_rotation_channel, pulse_left)
+            self.pwm.setServoPulse(self.right_rotation_channel, pulse_right)
+            
+            # 更新状态
+            self.last_rotation_left = angle_left
+            self.last_rotation_right = angle_right
+            self.last_update_time = current_time
+            
+            return True
+        except Exception as e:
+            print(f"设置旋转角失败: {e}")
+            return False
+    
+    def set_rotation_pulse(self, pulse_left, pulse_right):
+        """直接设置 PWM 脉宽（用于调试）
+        
+        Args:
+            pulse_left: 左舵机脉宽 (1000-2000μs)
+            pulse_right: 右舵机脉宽 (1000-2000μs)
+        """
+        if not self.enabled or not self.pwm:
+            return False
+        
+        try:
+            pulse_left = max(self.rotation_pulse_min, min(self.rotation_pulse_max, pulse_left))
+            pulse_right = max(self.rotation_pulse_min, min(self.rotation_pulse_max, pulse_right))
+            
+            self.pwm.setServoPulse(self.left_rotation_channel, pulse_left)
+            self.pwm.setServoPulse(self.right_rotation_channel, pulse_right)
+            return True
+        except Exception as e:
+            print(f"设置旋转脉宽失败: {e}")
+            return False
+    
+    def neutral_position(self):
+        """回到中立位置（竖直）"""
+        return self.set_rotation_angle(0.0, 0.0)
+
+
+class PropulsionLayer:
+    """推进层控制器 - 阶段1.3
+    
+    功能：在保持平衡的前提下实现推进
+    策略：优先保证平衡 > 利用剩余能力推进
+    """
+    
+    def __init__(self, enabled=False):
+        """初始化推进层
+        
+        Args:
+            enabled: 是否启用推进功能
+        """
+        self.enabled = enabled
+        
+        # 推进参数
+        self.propulsion_mode = "disabled"      # disabled, forward, backward, custom
+        self.speed_target = 0.0                # 目标速度 (0.0 ~ 1.0)
+        self.direction_target = 0.0            # 目标方向 (度)
+        self.max_speed = 0.5                   # 最大速度系数
+        
+        # 约束参数
+        self.balance_priority = 0.7            # 平衡优先级 (0.0=全推进, 1.0=全平衡)
+        self.max_roll_allowed = 3.0            # 推进时允许的最大翻滚角
+        self.min_thrust_required = 10.0        # 推进所需最小推力
+        
+        # 状态
+        self.current_speed = 0.0
+        self.current_direction = 0.0
+        self.available_force = 0.0             # 可用于推进的剩余力
+        
+        if self.enabled:
+            print("✓ 推进层已启用")
+        else:
+            print("⚠ 推进层已禁用")
+    
+    def set_propulsion_target(self, speed=0.0, direction=0.0, mode="custom"):
+        """设置推进目标
+        
+        Args:
+            speed: 目标速度 (0.0 ~ 1.0)
+            direction: 目标方向 (度)
+            mode: 推进模式
+        """
+        if not self.enabled:
+            return False
+        
+        self.speed_target = max(0.0, min(1.0, speed))
+        self.direction_target = direction % 360.0
+        self.propulsion_mode = mode
+        
+        return True
+    
+    def calculate_force_allocation(self, tau_balance, roll_angle, current_thrust_left, current_thrust_right):
+        """计算力分配 - 在平衡和推进之间找到最优平衡
+        
+        Args:
+            tau_balance: 平衡所需转矩 (N·m)
+            roll_angle: 当前翻滚角 (度)
+            current_thrust_left: 当前左推力 (N)
+            current_thrust_right: 当前右推力 (N)
+        
+        Returns:
+            force_alloc: {'rotation_left': angle, 'rotation_right': angle, 
+                         'thrust_left': force, 'thrust_right': force}
+        """
+        if not self.enabled or self.propulsion_mode == "disabled":
+            return None
+        
+        # 检查平衡约束
+        if abs(roll_angle) > self.max_roll_allowed:
+            # 翻滚角过大，停止推进
+            self.available_force = 0.0
+            return None
+        
+        # 计算可用于推进的能力
+        # 根据翻滚角动态调整优先级
+        roll_ratio = abs(roll_angle) / self.max_roll_allowed
+        adjusted_priority = self.balance_priority + roll_ratio * 0.2
+        
+        self.available_force = (1.0 - adjusted_priority) * (current_thrust_left + current_thrust_right) / 2
+        
+        # 根据推进模式分配力
+        if self.propulsion_mode == "forward":
+            # 前进：两推进器对称
+            propulsion_thrust = self.available_force * self.speed_target
+            return {
+                'rotation_left': 0.0,
+                'rotation_right': 0.0,
+                'thrust_delta': propulsion_thrust
+            }
+        
+        elif self.propulsion_mode == "backward":
+            # 后退：两推进器对称
+            propulsion_thrust = -self.available_force * self.speed_target
+            return {
+                'rotation_left': 0.0,
+                'rotation_right': 0.0,
+                'thrust_delta': propulsion_thrust
+            }
+        
+        elif self.propulsion_mode == "custom":
+            # 自定义方向：需要旋转推进器
+            propulsion_thrust = self.available_force * self.speed_target
+            rotation_angle = self.direction_target / 90.0 * 45.0  # 映射到旋转角范围
+            
+            return {
+                'rotation_left': rotation_angle,
+                'rotation_right': rotation_angle,
+                'thrust_delta': propulsion_thrust
+            }
+        
+        return None
+    
+    def disable_propulsion(self):
+        """禁用推进"""
+        self.propulsion_mode = "disabled"
+        self.speed_target = 0.0
+        self.current_speed = 0.0
+
+
 class SafeMotorController:
     """安全电机控制器"""
     
@@ -377,10 +661,18 @@ class FeedforwardDualIMUController:
         
         # 初始化控制器
         self.motor_controller = SafeMotorController(self.pwm) if self.pwm else None
+        # 初始化推进器旋转控制器 (阶段1.2 - enabled 由配置决定)
+        self.rotation_controller = ThrusterRotationController(self.pwm, enabled=ROTATION_ENABLED) if self.pwm else None
+        # 初始化推进层 (阶段1.3 - enabled 由配置决定)
+        self.propulsion_layer = PropulsionLayer(enabled=PROPULSION_ENABLED)
         self.pid = PID2DOF(PID_KP, PID_KI, PID_KD)
         self.fusion = DualIMUFusion()
         self.data_logger = DataLogger()
         self.omega_filtered = 0.0
+        
+        # 状态跟踪
+        self.current_thrust_left = 0.0
+        self.current_thrust_right = 0.0
         
         # 加载校准数据
         self._load_calibration()
@@ -457,7 +749,7 @@ class FeedforwardDualIMUController:
             return None
     
     def control_step(self, imu_data):
-        """单步控制"""
+        """单步控制 - 集成平衡、旋转、推进"""
         if not imu_data:
             return None
         
@@ -490,14 +782,59 @@ class FeedforwardDualIMUController:
             t = (abs(roll) - ANGLE_DEADZONE) / (ANGLE_DEADZONE_SOFT - ANGLE_DEADZONE)
             tau_total *= t * t * (3 - 2 * t)
         
-        # PWM
+        # PWM - 基础平衡控制
         pwm_delta = tau_total * THRUST_SCALE
         pwm_left = max(MIN_PULSE, min(MAX_PULSE, int(BASE_PULSE + pwm_delta)))
         pwm_right = max(MIN_PULSE, min(MAX_PULSE, int(BASE_PULSE - pwm_delta)))
         
-        # 设置电机
+        # 转换 PWM 为推力 (估计值)
+        # 简化模型: 推力 ∝ (脉宽 - BASE_PULSE)
+        thrust_left = (pwm_left - BASE_PULSE) / THRUST_SCALE
+        thrust_right = (pwm_right - BASE_PULSE) / THRUST_SCALE
+        self.current_thrust_left = thrust_left
+        self.current_thrust_right = thrust_right
+        
+        # 初始化旋转和推进参数
+        rotation_left = 0.0
+        rotation_right = 0.0
+        propulsion_thrust_left = 0.0
+        propulsion_thrust_right = 0.0
+        propulsion_applied = False
+        
+        # 阶段1.3: 推进层处理
+        if self.propulsion_layer and self.propulsion_layer.enabled:
+            force_alloc = self.propulsion_layer.calculate_force_allocation(
+                tau_total, roll, self.current_thrust_left, self.current_thrust_right
+            )
+            
+            if force_alloc:
+                propulsion_applied = True
+                rotation_left = force_alloc.get('rotation_left', 0.0)
+                rotation_right = force_alloc.get('rotation_right', 0.0)
+                
+                # 添加推进推力
+                thrust_delta = force_alloc.get('thrust_delta', 0.0)
+                propulsion_thrust_left = thrust_delta
+                propulsion_thrust_right = thrust_delta
+                
+                # 计算最终 PWM (基础 + 推进)
+                pwm_left = max(MIN_PULSE, min(MAX_PULSE, int(pwm_left + propulsion_thrust_left * THRUST_SCALE)))
+                pwm_right = max(MIN_PULSE, min(MAX_PULSE, int(pwm_right + propulsion_thrust_right * THRUST_SCALE)))
+        
+        # 阶段1.2: 推进器旋转控制 (如果没有推进层分配旋转角)
+        if not propulsion_applied and self.rotation_controller and self.rotation_controller.enabled:
+            # 根据转矩计算旋转角（对称旋转）
+            rotation_angle = self.rotation_controller.torque_to_angle(tau_total)
+            rotation_left = rotation_angle
+            rotation_right = rotation_angle
+        
+        # 设置电机 - 推力
         if self.motor_controller:
             self.motor_controller.set_both_motors(pwm_left, pwm_right)
+        
+        # 设置推进器旋转角 (旋转舵机)
+        if self.rotation_controller:
+            self.rotation_controller.set_rotation_angle(rotation_left, rotation_right)
         
         # 记录
         self.data_logger.log_data(
@@ -522,8 +859,122 @@ class FeedforwardDualIMUController:
         self.running = False
         if self.motor_controller:
             self.motor_controller.emergency_stop()
+        # 将旋转舵机回到中立位置
+        if self.rotation_controller:
+            self.rotation_controller.neutral_position()
         self.data_logger.stop_logging()
         print("✓ 控制器已停止")
+    
+    def enable_rotation_control(self, enable=True):
+        """启用/禁用推进器旋转控制 (用于阶段1.2)
+        
+        Args:
+            enable: True 启用旋转, False 禁用（保持竖直）
+        """
+        if self.rotation_controller:
+            self.rotation_controller.enabled = enable
+            status = "已启用" if enable else "已禁用"
+            print(f"✓ 推进器旋转控制{status}")
+            if enable:
+                self.rotation_controller.neutral_position()
+        else:
+            print("✗ 旋转控制器未初始化")
+    
+    def set_rotation_angle(self, angle_left, angle_right):
+        """手动设置推进器旋转角 (用于调试)
+        
+        Args:
+            angle_left: 左推进器旋转角 (-45 ~ +45°)
+            angle_right: 右推进器旋转角 (-45 ~ +45°)
+        """
+        if self.rotation_controller:
+            return self.rotation_controller.set_rotation_angle(angle_left, angle_right)
+        return False
+    
+    def enable_propulsion_control(self, enable=True):
+        """启用/禁用推进功能 (用于阶段1.3)
+        
+        Args:
+            enable: True 启用推进, False 禁用
+        """
+        if self.propulsion_layer:
+            self.propulsion_layer.enabled = enable
+            status = "已启用" if enable else "已禁用"
+            print(f"✓ 推进功能{status}")
+            if not enable:
+                self.propulsion_layer.disable_propulsion()
+        else:
+            print("✗ 推进层未初始化")
+    
+    def set_propulsion_target(self, speed=0.0, direction=0.0, mode="custom"):
+        """设置推进目标
+        
+        Args:
+            speed: 目标速度 (0.0 ~ 1.0)
+            direction: 目标方向 (度, 0=前进)
+            mode: 推进模式 (forward, backward, custom)
+        """
+        if self.propulsion_layer:
+            return self.propulsion_layer.set_propulsion_target(speed, direction, mode)
+        return False
+    
+    def set_propulsion_mode(self, mode="disabled"):
+        """设置推进模式
+        
+        Args:
+            mode: disabled, forward, backward, custom
+        """
+        if self.propulsion_layer:
+            if mode in ["disabled", "forward", "backward", "custom"]:
+                self.propulsion_layer.propulsion_mode = mode
+                print(f"✓ 推进模式设置为: {mode}")
+                return True
+            else:
+                print(f"✗ 无效的推进模式: {mode}")
+                return False
+        return False
+    
+    def set_propulsion_priority(self, balance_priority=0.7):
+        """设置平衡 vs 推进的优先级
+        
+        Args:
+            balance_priority: 0.0=全推进, 1.0=全平衡 (默认0.7)
+        """
+        if self.propulsion_layer:
+            self.propulsion_layer.balance_priority = max(0.0, min(1.0, balance_priority))
+            print(f"✓ 平衡优先级设置为: {self.propulsion_layer.balance_priority:.2f}")
+        return False
+    
+    def set_propulsion_constraints(self, max_roll=3.0, min_thrust=10.0):
+        """设置推进约束条件
+        
+        Args:
+            max_roll: 推进时允许的最大翻滚角 (度)
+            min_thrust: 推进所需最小推力 (N)
+        """
+        if self.propulsion_layer:
+            self.propulsion_layer.max_roll_allowed = max_roll
+            self.propulsion_layer.min_thrust_required = min_thrust
+            print(f"✓ 推进约束设置: max_roll={max_roll}°, min_thrust={min_thrust}N")
+        return False
+    
+    def get_system_status(self):
+        """获取系统状态
+        
+        Returns:
+            status_dict: 包含各模块状态的字典
+        """
+        status = {
+            'rotation_enabled': self.rotation_controller.enabled if self.rotation_controller else False,
+            'propulsion_enabled': self.propulsion_layer.enabled if self.propulsion_layer else False,
+            'rotation_left': self.rotation_controller.last_rotation_left if self.rotation_controller else 0.0,
+            'rotation_right': self.rotation_controller.last_rotation_right if self.rotation_controller else 0.0,
+            'propulsion_mode': self.propulsion_layer.propulsion_mode if self.propulsion_layer else 'disabled',
+            'propulsion_speed': self.propulsion_layer.current_speed if self.propulsion_layer else 0.0,
+            'thrust_left': self.current_thrust_left,
+            'thrust_right': self.current_thrust_right,
+        }
+        return status
     
     def run(self, frequency=100):
         """主循环"""

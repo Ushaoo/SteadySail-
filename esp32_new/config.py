@@ -23,6 +23,38 @@ MIN_PULSE = 1000        # 最小脉宽 (μs)
 MAX_PULSE = 2000        # 最大脉宽 (μs)
 THRUST_SCALE = 0.55     # 推力到 PWM 的缩放系数
 
+# ==================== 推进器旋转配置 (阶段1.1+) ====================
+ROTATION_ENABLED = False              # 是否启用旋转功能（默认关闭）
+LEFT_ROTATION_CHANNEL = 2             # 左旋转舵机 PCA9685 通道
+RIGHT_ROTATION_CHANNEL = 3            # 右旋转舵机 PCA9685 通道
+MAX_ROTATION_ANGLE = 45               # 最大旋转角 (度)
+ROTATION_PULSE_MIN = 1000             # 旋转舵机最小脉宽 (μs, 对应 -45°)
+ROTATION_PULSE_MAX = 2000             # 旋转舵机最大脉宽 (μs, 对应 +45°)
+ROTATION_PULSE_CENTER = 1500          # 旋转舵机中立脉宽 (μs, 对应 0°)
+MAX_THRUST_FORCE = 50.0               # 最大推力 (N) - 需根据实际标定
+ROTATION_RATE_LIMIT = 90.0            # 旋转速率限制 (deg/s)
+
+# ==================== 推进功能配置 (阶段1.3) ====================
+PROPULSION_ENABLED = False             # 是否启用推进功能（默认关闭）
+PROPULSION_MODE = "disabled"           # 推进模式: disabled, forward, backward, custom
+PROPULSION_SPEED_TARGET = 0.0          # 目标推进速度 (0.0 ~ 1.0)
+PROPULSION_DIRECTION = 0.0             # 目标推进方向 (度, 0=前进, 180=后退)
+PROPULSION_MAX_SPEED = 0.5             # 最大推进速度系数 (0.0 ~ 1.0)
+PROPULSION_PRIORITY = 0.7              # 推进优先级 vs 平衡 (0.0 ~ 1.0)
+                                       # 0.0 = 全力平衡, 1.0 = 全力推进
+
+# ==================== 旋转策略配置 (阶段1.2~1.3) ====================
+ROTATION_STRATEGY = "automatic"        # 旋转策略: disabled, automatic, manual, custom
+ROTATION_SYMMETRIC = True              # 两推进器是否对称旋转
+ROTATION_INDEPENDENT = False           # 推进器是否独立旋转角
+AUTO_TORQUE_CONVERSION = True          # 是否自动转矩转换为旋转角
+
+# ==================== 约束和优化配置 ====================
+BALANCE_PRIORITY_MODE = True           # 平衡优先模式 (平衡 > 推进)
+MAX_ROLL_FOR_PROPULSION = 3.0          # 推进时允许的最大翻滚角 (度)
+MIN_THRUST_FOR_PROPULSION = 10.0       # 推进时最小推力 (N)
+DYNAMIC_PRIORITY_ADJUSTMENT = True     # 动态调整优先级 (基于翻滚角)
+
 # ==================== 控制参数 ====================
 DT = 0.01               # 控制周期 (s)
 CONTROL_FREQUENCY = 100 # 控制循环频率 (Hz)
