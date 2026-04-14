@@ -81,6 +81,11 @@ extern "C" {
 #define ANGLE_DEADZONE_SOFT 3.0f        // 角度死区软边界 (度)
 #define OMEGA_DEADZONE_SOFT 6.0f        // 角速度死区软边界 (deg/s)
 
+/* ==================== 角度零点校准配置 ==================== */
+#define ENABLE_ANGLE_CALIBRATION    1   // 1 = 启用角度校准, 0 = 禁用
+#define CALIBRATION_WAIT_TIME       3000 // 等待时间 (ms)，用户需要在这时间内保持垂直
+#define CALIBRATION_SAMPLES_COUNT   100  // 校准采样数，用于平均
+
 /* ==================== 调试开关 ==================== */
 #define ENABLE_SERVO_ROTATION       1   // 1 = 启用舵机旋转 (UART控制), 0 = 禁用
 #define ENABLE_FORCE_ALLOCATION     1   // 1 = 启用力分配 (根据推进器角度调整平衡), 0 = 禁用

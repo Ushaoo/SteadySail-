@@ -349,9 +349,90 @@ I (210) I2C_DRIVER: Total devices found: 3
    - 看到 0x68, 0x69, 0x40 说明 I2C 连接正常
    - 如果缺少设备，检查接线和 I2C 地址
 
-### 校准
+### 角度零点校准 ⭐ **新增功能**
 
-系统在启动时会自动校准 IMU 零偏（需要 5-10 秒，**设备必须保持完全静止**）。
+系统支持**自动角度零点校准**，用于消除磁铁位置导致的角度偏差。
+
+#### 工作原理
+
+```
+示例：
+启动时推进器实际垂直（90°），但 IMU 读数显示 95°
+系统会自动记录偏差: offset = 95° - 90° = 5°
+后续所有读数都减去这个偏差：
+  - IMU 读: 100° → 校准后: 100° - 5° = 95° ✓
+```
+
+#### 校准流程
+
+1. **打开日志监视器**
+
+   ```bash
+   idf.py monitor
+   ```
+
+2. **启动系统**，会看到：
+
+   ```
+   I (xxx) CONTROL_LOOP: Angle calibration ENABLED - waiting 3 seconds for user to set vertical position...
+   ```
+
+3. **在这 3 秒内**：
+   - 让推进器保持**完全垂直**（90°）
+   - 不要移动或晃动系统
+   - 等待倒计时完成
+
+4. **系统自动校准**：
+
+   ```
+   I (xxx) CONTROL_LOOP: Starting angle calibration - sampling 100 readings...
+   I (xxx) CONTROL_LOOP: Calibrating... 10/100 samples
+   I (xxx) CONTROL_LOOP: Calibrating... 20/100 samples
+   ...
+   I (xxx) CONTROL_LOOP: Angle calibration completed! Offset = 5.23°
+   ```
+
+5. **校准完成** ✓
+
+   系统开始正常运行，所有角度读数都自动补偿
+
+#### 配置校准参数
+
+在 `config.h` 中修改：
+
+```c
+#define ENABLE_ANGLE_CALIBRATION    1       // 1=启用校准, 0=禁用
+#define CALIBRATION_WAIT_TIME       3000    // 等待时间 (ms)
+#define CALIBRATION_SAMPLES_COUNT   100     // 采样数（更多=更精准）
+```
+
+**调参建议：**
+- **CALIBRATION_WAIT_TIME** - 增加值给用户更多时间调整
+- **CALIBRATION_SAMPLES_COUNT** - 增加值提高精度（但启动变慢）
+
+#### 手动校准（无需重编译）
+
+如果需要重新校准，可以通过 UART 命令：
+
+```bash
+# 设置角度偏差为 5.0°
+set_angle_offset 5.0
+
+# 查询当前偏差
+get_angle_offset
+
+# 查询校准状态
+get_calib_status
+```
+
+---
+
+### IMU 零偏校准
+
+系统在启动时会自动校准 IMU 的加速度和陀螺仪零偏（需要 5-10 秒，**设备必须保持完全静止**）。这与上面的**角度零点校准**不同：
+
+- **IMU 零偏校准**（自动）：消除传感器本身的偏差
+- **角度零点校准**（自动）：消除安装位置导致的角度偏差
 
 ### 实时监控
 
@@ -513,6 +594,26 @@ idf.py -p COM3 -b 115200 flash monitor
 
 # 3. 检查驱动程序（Windows）
 ```
+
+### Q: 角度校准后仍有偏差？
+
+**A:** 检查以下几点：
+1. **校准时未保持垂直** - 重启系统重新校准，确保推进器完全垂直
+2. **校准采样数太少** - 增加 `CALIBRATION_SAMPLES_COUNT`（100→200）
+3. **系统晃动** - 确保在等待 3 秒间内系统完全静止
+4. **磁铁位置变了** - 如果移动了磁铁，需要重新校准
+
+### Q: 如何禁用自动角度校准？
+
+**A:** 修改 `config.h`：
+```c
+#define ENABLE_ANGLE_CALIBRATION    0       // 禁用自动校准
+```
+然后重编译。
+
+### Q: 校准过程中系统没有反应？
+
+**A:** 这是正常的！系统在等待 3 秒让用户调整位置，然后采集 100 个样本（需要 1 秒），所以总共需要 4 秒。只需耐心等待日志中出现"Angle calibration completed"。
 
 ---
 

@@ -55,6 +55,12 @@ typedef struct {
     uint32_t loop_count;            ///< 循环计数
     uint32_t last_imu_error;        ///< 最后的 IMU 错误计数
     
+    // 角度校准
+    float angle_offset;             ///< 角度零点偏差 (度)
+    int is_calibrated;              ///< 是否已校准 (1=是, 0=否)
+    uint32_t calibration_count;     ///< 校准计数器
+    float calibration_sum;          ///< 校准累计值
+    
     // FreeRTOS 任务
     TaskHandle_t task_handle;       ///< 控制循环任务句柄
     
@@ -121,6 +127,40 @@ void control_loop_get_stats(control_loop_t *loop, control_loop_stats_t *stats);
  * @param loop 控制循环实例指针
  */
 void control_loop_reset_stats(control_loop_t *loop);
+
+/**
+ * @brief 获取当前角度偏差
+ * 
+ * @param loop 控制循环实例指针
+ * @return 角度偏差值 (度)
+ */
+float control_loop_get_angle_offset(control_loop_t *loop);
+
+/**
+ * @brief 设置角度偏差（手动校准）
+ * 
+ * @param loop 控制循环实例指针
+ * @param offset 角度偏差值 (度)
+ */
+void control_loop_set_angle_offset(control_loop_t *loop, float offset);
+
+/**
+ * @brief 获取校准状态
+ * 
+ * @param loop 控制循环实例指针
+ * @return 1 = 已校准, 0 = 未校准
+ */
+int control_loop_is_calibrated(control_loop_t *loop);
+
+/**
+ * @brief 应用角度偏差补偿（内部使用）
+ * 
+ * 从原始欧拉角中减去偏差
+ * 
+ * @param euler 欧拉角指针
+ * @param offset 角度偏差值 (度)
+ */
+void control_loop_apply_angle_offset(euler_angle_t *euler, float offset);
 
 #ifdef __cplusplus
 }

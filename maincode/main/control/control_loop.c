@@ -120,6 +120,25 @@ static void control_loop_task(void *pvParameters)
                          gyro2.x, gyro2.y, gyro2.z,
                          1.0f / CONTROL_FREQ_HZ, &euler);
         
+        // ===== 步骤 3.5: 角度校准 =====
+        // 如果尚未校准，首先采集样本计算偏差
+        if (!loop->is_calibrated && ENABLE_ANGLE_CALIBRATION) {
+            loop->calibration_sum += euler.roll;
+            loop->calibration_count++;
+            
+            if (loop->calibration_count >= CALIBRATION_SAMPLES_COUNT) {
+                // 校准完成：计算平均值作为偏差
+                loop->angle_offset = loop->calibration_sum / CALIBRATION_SAMPLES_COUNT;
+                loop->is_calibrated = 1;
+                ESP_LOGI(TAG, "Angle calibration completed! Offset = %.2f°", loop->angle_offset);
+            } else if ((loop->calibration_count % 10) == 0) {
+                ESP_LOGI(TAG, "Calibrating... %d/%d samples", loop->calibration_count, CALIBRATION_SAMPLES_COUNT);
+            }
+        }
+        
+        // 应用角度偏差补偿
+        control_loop_apply_angle_offset(&euler, loop->angle_offset);
+        
         // ===== 步骤 4: 死区处理 =====
         float roll_filtered = apply_deadzone_smooth(euler.roll, ANGLE_DEADZONE, ANGLE_DEADZONE_SOFT);
         
@@ -291,6 +310,21 @@ esp_err_t control_loop_init(control_loop_t *loop)
     loop->max_control_output = 50.0f;
     loop->loop_count = 0;
     loop->last_imu_error = 0;
+    
+    // ===== 初始化角度校准 =====
+#if ENABLE_ANGLE_CALIBRATION
+    loop->angle_offset = 0.0f;
+    loop->is_calibrated = 0;
+    loop->calibration_count = 0;
+    loop->calibration_sum = 0.0f;
+    ESP_LOGI(TAG, "Angle calibration ENABLED - waiting 3 seconds for user to set vertical position...");
+    vTaskDelay(pdMS_TO_TICKS(CALIBRATION_WAIT_TIME));
+    ESP_LOGI(TAG, "Starting angle calibration - sampling %d readings...", CALIBRATION_SAMPLES_COUNT);
+#else
+    loop->angle_offset = 0.0f;
+    loop->is_calibrated = 1;
+    ESP_LOGI(TAG, "Angle calibration DISABLED");
+#endif
 
     g_loop_instance = loop;
 
@@ -363,4 +397,59 @@ void control_loop_reset_stats(control_loop_t *loop)
 
     loop->loop_count = 0;
     loop->last_imu_error = 0;
+}
+
+/**
+ * @brief 获取当前角度偏差
+ */
+float control_loop_get_angle_offset(control_loop_t *loop)
+{
+    if (loop == NULL) {
+        return 0.0f;
+    }
+    return loop->angle_offset;
+}
+
+/**
+ * @brief 设置角度偏差（手动校准）
+ */
+void control_loop_set_angle_offset(control_loop_t *loop, float offset)
+{
+    if (loop == NULL) {
+        return;
+    }
+    
+    loop->angle_offset = offset;
+    loop->is_calibrated = 1;
+    ESP_LOGI(TAG, "Angle offset manually set to: %.2f°", offset);
+}
+
+/**
+ * @brief 获取校准状态
+ */
+int control_loop_is_calibrated(control_loop_t *loop)
+{
+    if (loop == NULL) {
+        return 0;
+    }
+    return loop->is_calibrated;
+}
+
+/**
+ * @brief 应用角度偏差补偿
+ * 
+ * 从原始欧拉角中减去偏差
+ * 示例：
+ *   - 原始读数: 95°
+ *   - 偏差: 5°
+ *   - 校准后: 95° - 5° = 90°
+ */
+void control_loop_apply_angle_offset(euler_angle_t *euler, float offset)
+{
+    if (euler == NULL) {
+        return;
+    }
+    
+    // 只校准 roll 角（横滚角，船的平衡）
+    euler->roll -= offset;
 }
