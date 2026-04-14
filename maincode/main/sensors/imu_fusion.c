@@ -124,7 +124,6 @@ int imu_fusion_update(imu_fusion_t *fusion,
 
     // 更新循环缓冲区
     for (int i = 0; i < 2; i++) {
-        int idx = 0;
         if (i == 0) {
             // IMU1
             fusion->gyro_buf[i][fusion->gyro_buf_idx[i]][0] = gx1;

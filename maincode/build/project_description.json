@@ -1,7 +1,7 @@
 {
     "version":            "1.3",
     "project_name":       "steadysail_esp32s3",
-    "project_version":    "4942ecb",
+    "project_version":    "7b4ef24-dirty",
     "project_path":       "D:/SteadySail--1/maincode",
     "idf_path":           "C:/esp/v6.0/esp-idf",
     "build_dir":          "D:/SteadySail--1/maincode/build",
