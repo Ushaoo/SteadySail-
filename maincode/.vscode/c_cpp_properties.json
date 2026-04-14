@@ -1,0 +1,23 @@
+{
+  "configurations": [
+    {
+      "name": "ESP-IDF",
+      "compileCommands": "${workspaceFolder}/build/compile_commands.json",
+      "includePath": [
+        "${workspaceFolder}",
+        "${workspaceFolder}/main",
+        "${workspaceFolder}/main/**",
+        "${workspaceFolder}/build/config"
+      ],
+      "defines": [
+        "ESP32",
+        "ESP_PLATFORM",
+        "CONFIG_IDF_TARGET_ESP32S3"
+      ],
+      "cStandard": "c11",
+      "cppStandard": "c++17",
+      "intelliSenseMode": "gcc-riscv"
+    }
+  ],
+  "version": 4
+}
