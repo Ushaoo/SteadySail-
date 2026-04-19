@@ -1,0 +1,13 @@
+# Target labels
+ bootloader
+# Source files and their labels
+/Users/adam/Desktop/这是一个总文件夹/上学/HKUST/FYP/ESP/my_project/build/CMakeFiles/bootloader
+/Users/adam/Desktop/这是一个总文件夹/上学/HKUST/FYP/ESP/my_project/build/CMakeFiles/bootloader.rule
+/Users/adam/Desktop/这是一个总文件夹/上学/HKUST/FYP/ESP/my_project/build/CMakeFiles/bootloader-complete.rule
+/Users/adam/Desktop/这是一个总文件夹/上学/HKUST/FYP/ESP/my_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule
+/Users/adam/Desktop/这是一个总文件夹/上学/HKUST/FYP/ESP/my_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule
+/Users/adam/Desktop/这是一个总文件夹/上学/HKUST/FYP/ESP/my_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule
+/Users/adam/Desktop/这是一个总文件夹/上学/HKUST/FYP/ESP/my_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule
+/Users/adam/Desktop/这是一个总文件夹/上学/HKUST/FYP/ESP/my_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule
+/Users/adam/Desktop/这是一个总文件夹/上学/HKUST/FYP/ESP/my_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule
+/Users/adam/Desktop/这是一个总文件夹/上学/HKUST/FYP/ESP/my_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule

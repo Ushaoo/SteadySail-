@@ -1,0 +1,6 @@
+source "/Users/adam/esp/esp-idf-v4.4.3/components/app_update/Kconfig.projbuild"
+source "/Users/adam/esp/esp-idf-v4.4.3/components/bootloader/Kconfig.projbuild"
+source "/Users/adam/esp/esp-idf-v4.4.3/components/esp_rom/Kconfig.projbuild"
+source "/Users/adam/esp/esp-idf-v4.4.3/components/esptool_py/Kconfig.projbuild"
+source "/Users/adam/esp/esp-idf-v4.4.3/components/partition_table/Kconfig.projbuild"
+source "/Users/adam/Desktop/这是一个总文件夹/上学/HKUST/FYP/ESP/my_project/components/blinker/Kconfig.projbuild"

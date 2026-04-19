@@ -1,0 +1,43 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/Users/adam/Desktop/\u8fd9\u662f\u4e00\u4e2a\u603b\u6587\u4ef6\u5939/\u4e0a\u5b66/HKUST/FYP/ESP/my_project/build/CMakeFiles/bootloader"
+		},
+		{
+			"file" : "/Users/adam/Desktop/\u8fd9\u662f\u4e00\u4e2a\u603b\u6587\u4ef6\u5939/\u4e0a\u5b66/HKUST/FYP/ESP/my_project/build/CMakeFiles/bootloader.rule"
+		},
+		{
+			"file" : "/Users/adam/Desktop/\u8fd9\u662f\u4e00\u4e2a\u603b\u6587\u4ef6\u5939/\u4e0a\u5b66/HKUST/FYP/ESP/my_project/build/CMakeFiles/bootloader-complete.rule"
+		},
+		{
+			"file" : "/Users/adam/Desktop/\u8fd9\u662f\u4e00\u4e2a\u603b\u6587\u4ef6\u5939/\u4e0a\u5b66/HKUST/FYP/ESP/my_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule"
+		},
+		{
+			"file" : "/Users/adam/Desktop/\u8fd9\u662f\u4e00\u4e2a\u603b\u6587\u4ef6\u5939/\u4e0a\u5b66/HKUST/FYP/ESP/my_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule"
+		},
+		{
+			"file" : "/Users/adam/Desktop/\u8fd9\u662f\u4e00\u4e2a\u603b\u6587\u4ef6\u5939/\u4e0a\u5b66/HKUST/FYP/ESP/my_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule"
+		},
+		{
+			"file" : "/Users/adam/Desktop/\u8fd9\u662f\u4e00\u4e2a\u603b\u6587\u4ef6\u5939/\u4e0a\u5b66/HKUST/FYP/ESP/my_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule"
+		},
+		{
+			"file" : "/Users/adam/Desktop/\u8fd9\u662f\u4e00\u4e2a\u603b\u6587\u4ef6\u5939/\u4e0a\u5b66/HKUST/FYP/ESP/my_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule"
+		},
+		{
+			"file" : "/Users/adam/Desktop/\u8fd9\u662f\u4e00\u4e2a\u603b\u6587\u4ef6\u5939/\u4e0a\u5b66/HKUST/FYP/ESP/my_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule"
+		},
+		{
+			"file" : "/Users/adam/Desktop/\u8fd9\u662f\u4e00\u4e2a\u603b\u6587\u4ef6\u5939/\u4e0a\u5b66/HKUST/FYP/ESP/my_project/build/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"bootloader"
+		],
+		"name" : "bootloader"
+	}
+}
