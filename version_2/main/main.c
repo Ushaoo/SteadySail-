@@ -15,7 +15,7 @@
 static const char *TAG = "MAIN";
 
 // 键盘控制的全局目标转向角度
-static float g_steering_angle_deg = 0.0f;
+static float g_steering_angle_deg = 180.0f;
 
 // 强实时大本营控制任务 (100Hz)
 void control_core_task(void *pvParameters) {
@@ -82,15 +82,21 @@ void app_main(void)
     motor_control_init();
     steering_control_init(); // 开启外部中断读取编码器
     
+    // 等待编码器稳定后进行校准（竖直状态下将编码器值设为0点基准）
+    vTaskDelay(pdMS_TO_TICKS(100));
+    steering_control_calibrate_encoders();
+    
     ESP_LOGI(TAG, "SteadySail 就绪，当前模式: %d", CURRENT_RUN_MODE);
 
     // ************ 如果是 专用的大电机 ESC 校准模式 ************
 #if CURRENT_RUN_MODE == MODE_CALIBRATE_ESC
-    xTaskCreatePinnedToCore(motor_control_esc_calibrate_task, "esc_calibrate_task", 4096, NULL, 5, NULL, 1);
-    ESP_LOGW(TAG, "注意: 当前运行于大电机校准模式！已挂起平衡与转向计算...");
+    ESP_LOGW(TAG, "注意: 当前运行于大电机校准模式！");
+    xTaskCreatePinnedToCore(motor_control_esc_calibrate_task, "esc_calibrate_task", 8192, NULL, 5, NULL, 1);
+    // 校准模式下只运行ESC任务，永远不会到达下面的代码
     while(1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
-#endif
-
+#else
+    // ============ 非校准模式：正常运行平衡控制 ============
+    
     // 2. 将核心控制抛入后台的强心 Task (固定在 Core 1 上跑 100Hz)
     xTaskCreatePinnedToCore(control_core_task, "control_core_task", 4096, NULL, 5, NULL, 1);
 
@@ -137,4 +143,5 @@ void app_main(void)
         }
         vTaskDelay(pdMS_TO_TICKS(10)); // 提高串口响应速度
     }
+#endif
 }

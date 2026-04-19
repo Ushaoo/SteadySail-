@@ -11,7 +11,7 @@
 #define MODE_CALIBRATE_ESC       4  // ✨大电机电调校准模式：1000->2000->1000 循环扫描
 
 // 当前激活的模式 (编译前修改这里)
-#define CURRENT_RUN_MODE   MODE_TEST_SENSORS
+#define CURRENT_RUN_MODE   MODE_CALIBRATE_ESC
 
 // ==========================================
 // 2. 硬件引脚分配 (10 个核心 GPIO)
@@ -31,8 +31,9 @@
 #define PIN_STEER_RIGHT 2
 
 // --- 主推进器 (电调 ESC) PWM 输出 ---
-#define PIN_THRUST_LEFT  15
-#define PIN_THRUST_RIGHT 16
+// ESP32-S3 LEDC LOW_SPEED 支持的GPIO: 0-19, 21-25, 26-33
+#define PIN_THRUST_LEFT  18
+#define PIN_THRUST_RIGHT 19
 
 // ==========================================
 // 3. 安全保护机制开关
