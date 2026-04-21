@@ -22,10 +22,24 @@
 - **Flash**：≥ 4MB
 - **RAM**：≥ 512KB SRAM
 
+### I2C 接口支持说明
+
+**ESP32-S3 I2C 支持情况**：
+- 支持多个 I2C 接口（I2C_NUM_0, I2C_NUM_1, 甚至更多）
+- 每个 I2C 接口可自由分配到任意 GPIO 引脚（只需 SDA 和 SCL）
+- 不同 I2C 接口可以使用不同的时钟速率
+
+**当前项目配置**：
+- **I2C0**：GPIO 8(SDA) + GPIO 9(SCL) → IMU1
+- **I2C1**：GPIO 10(SDA) + GPIO 11(SCL) → IMU2
+
 ### 传感器
 - **双IMU传感器**：MPU-6050 × 2（加速度计 + 陀螺仪）
   - 量程：加速度 ±16g，角速度 ±2000°/s
   - 通信接口：I2C（地址 0x68）
+  - **I2C 地址**：MPU-6050 的 I2C 地址由 AD0 引脚决定
+    - AD0 接 GND → 地址为 0x68
+    - AD0 接 VCC → 地址为 0x69
   
 ### 电机与执行器
 - **主推进电机**：无刷电机 × 2（两侧对称）
@@ -123,6 +137,137 @@
 
 ⚠️ I2C 上拉电阻: 需在 SDA/SCL 各添加 4.7kΩ 上拉至 3.3V
 ⚠️ 信号隔离: GPIO 信号线与电源线分开布线，避免干扰
+```
+
+### ESP32-S3 I2C 连接方案（三选一）
+
+#### 方案A：推荐 - 使用两条独立 I2C 总线（当前配置）
+
+适用于有充足 GPIO 的场景。ESP32-S3 支持多个 I2C 接口，完全可以使用两条独立总线：
+
+```
+配置文件: main/system_config.h
+├── I2C0 总线: GPIO 8 (SDA) + GPIO 9 (SCL)
+│   └── IMU1 (MPU-6050, AD0=GND, 地址 0x68)
+│
+└── I2C1 总线: GPIO 10 (SDA) + GPIO 11 (SCL)
+    └── IMU2 (MPU-6050, AD0=GND, 地址 0x68)
+
+💡 优势：
+  • 完全独立的总线，不会互相干扰
+  • 可以不同的频率运行
+  • 故障隔离（一条线故障另一条继续工作）
+  • 代码改动最小（当前就是这个方案）
+```
+
+#### 方案B：共享一条 I2C 总线 + 地址区分
+
+如果只有一条 I2C 总线（GPIO 8/9 或 GPIO 10/11），可通过 MPU-6050 的 AD0 引脚区分地址：
+
+```
+配置: 需修改 main/system_config.h 和 main/imu_driver.c
+
+GPIO 8  (SDA) ──┬─ IMU1 (AD0=GND,  地址 0x68)
+GPIO 9  (SCL) ──┤
+                └─ IMU2 (AD0=VCC,  地址 0x69)
+                
++3.3V ──────────┬─ IMU1 (+3.3V引脚)
+                └─ IMU2 (+3.3V引脚, 用于AD0)
+GND ────────────┬─ IMU1 (GND, 用于AD0)
+                └─ IMU2 (GND)
+
+修改步骤：
+1. 编辑 main/imu_driver.c，同时支持地址 0x68 和 0x69
+2. 删除 I2C1 初始化
+3. 两个 IMU 都在 I2C0 上，但地址不同
+```
+
+**修改代码示例**：
+```c
+// 在 imu_driver.c 中改为单总线双地址读取
+#define MPU6050_ADDR_1  0x68  // IMU1 地址
+#define MPU6050_ADDR_2  0x69  // IMU2 地址（需配置 AD0=VCC）
+
+esp_err_t imu_driver_init(void) {
+    // 只初始化 I2C0
+    i2c_config_t conf = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = PIN_I2C0_SDA,  // GPIO 8
+        .scl_io_num = PIN_I2C0_SCL,  // GPIO 9
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = I2C_MASTER_FREQ_HZ,
+    };
+    i2c_param_config(I2C_NUM_0, &conf);
+    i2c_driver_install(I2C_NUM_0, conf.mode, 0, 0, 0);
+    
+    // 唤醒两个 IMU（地址不同）
+    mpu6050_wake_up_addr(I2C_NUM_0, MPU6050_ADDR_1);
+    mpu6050_wake_up_addr(I2C_NUM_0, MPU6050_ADDR_2);
+}
+
+esp_err_t imu_driver_read(dual_imu_data_t *data) {
+    read_single_imu_addr(I2C_NUM_0, MPU6050_ADDR_1, &data->imu1);
+    read_single_imu_addr(I2C_NUM_0, MPU6050_ADDR_2, &data->imu2);
+}
+```
+
+#### 方案C：使用 I2C 多路复用器芯片（TCA9548A）
+
+适合有大量 I2C 设备的复杂场景：
+
+```
+GPIO 8  (SDA) ──┬─ TCA9548A (主 I2C)
+GPIO 9  (SCL) ──┤
+                
+TCA9548A 有 8 个子通道：
+  CH0 → IMU1 (MPU-6050, 0x68)
+  CH1 → IMU2 (MPU-6050, 0x68)
+  CH2 → 其他传感器...
+  ...
+
+💡 优势：
+  • 单主控制器可接多个相同地址的从设备
+  • 易于扩展
+  
+⚠️ 缺点：
+  • 多了一块硬件芯片（成本+复杂度）
+  • 代码改动较大（需要多路选择逻辑）
+```
+
+---
+
+### 如何选择最适合的方案
+
+| 条件 | 推荐方案 |
+|------|--------|
+| **GPIO 充足**（≥4个 GPIO 用于 I2C） | 方案A（当前） |
+| **GPIO 紧张**（只有 2 个 GPIO） | 方案B（需要修改代码） |
+| **需要更多传感器**（>2 个 I2C 设备） | 方案C（需要硬件改造） |
+| **最快快速原型** | 方案A（无需改动） |
+
+---
+
+### 验证 I2C 连接
+
+烧录后检查连接是否成功：
+
+```bash
+# 进入 MODE_TEST_SENSORS 模式
+# 修改 main/system_config.h
+#define CURRENT_RUN_MODE   MODE_TEST_SENSORS
+
+# 构建并烧录
+idf.py build flash monitor
+
+# 监控输出，应看到类似：
+I (40) IMU_DRIVER: 双 MPU6050 初始化成功！
+
+# 如果显示失败，检查：
+# 1. GPIO 接线是否正确？
+# 2. I2C 上拉电阻是否在位（4.7kΩ）？
+# 3. MPU-6050 电源（+3.3V, GND）是否稳定？
+# 4. AD0 引脚配置是否正确？
 ```
 
 ---
