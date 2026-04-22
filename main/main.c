@@ -17,6 +17,59 @@ static const char *TAG = "MAIN";
 // 键盘控制的全局目标转向角度
 static float g_steering_angle_deg = 180.0f;
 
+// IMU 专用测试任务 (100Hz)
+void imu_test_task(void *pvParameters) {
+    dual_imu_data_t imu_data;
+    balance_state_t state;
+    
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    const TickType_t xFrequency = pdMS_TO_TICKS(10); // 10ms = 100Hz
+
+    ESP_LOGI(TAG, "========== IMU 测试模式启动 ==========");
+    ESP_LOGI(TAG, "输出频率: 10Hz (每100ms一条)\n");
+    
+    int print_count = 0;
+    while (1) {
+        if (imu_driver_read(&imu_data) == ESP_OK) {
+            // 融合得到四元数和欧拉角
+            balance_controller_update(&imu_data, &state);
+            
+            // 每 10 帧打一条（10Hz）
+            if (++print_count >= 10) {
+                printf("\n--- IMU 数据输出 (100Hz读取, 10Hz显示) ---\n");
+                
+                #if USE_DUAL_IMU
+                printf("[IMU1] Ax:%.3f Ay:%.3f Az:%.3f | Gx:%.3f Gy:%.3f Gz:%.3f\n",
+                       imu_data.imu1.accel_x, imu_data.imu1.accel_y, imu_data.imu1.accel_z,
+                       imu_data.imu1.gyro_x, imu_data.imu1.gyro_y, imu_data.imu1.gyro_z);
+                printf("[IMU2] Ax:%.3f Ay:%.3f Az:%.3f | Gx:%.3f Gy:%.3f Gz:%.3f\n",
+                       imu_data.imu2.accel_x, imu_data.imu2.accel_y, imu_data.imu2.accel_z,
+                       imu_data.imu2.gyro_x, imu_data.imu2.gyro_y, imu_data.imu2.gyro_z);
+                #else
+                printf("[IMU] Ax:%.3f Ay:%.3f Az:%.3f | Gx:%.3f Gy:%.3f Gz:%.3f\n",
+                       imu_data.imu1.accel_x, imu_data.imu1.accel_y, imu_data.imu1.accel_z,
+                       imu_data.imu1.gyro_x, imu_data.imu1.gyro_y, imu_data.imu1.gyro_z);
+                #endif
+                
+                printf("[融合] Roll:%.2f° Pitch:%.2f° Yaw:%.2f° | Tau:%.2f\n",
+                       state.roll_deg, state.pitch_deg, state.yaw_deg, state.tau_total);
+                printf("-----------------------------------\n");
+                
+                print_count = 0;
+            }
+        } else {
+            static int err_count = 0;
+            if (++err_count >= 100) {
+                ESP_LOGW(TAG, "⚠️  IMU 读取失败 (连续失败次数: %d)", err_count);
+                ESP_LOGW(TAG, "请检查: 1) I2C 线路连接  2) IMU 电源  3) 地址配置");
+                err_count = 0;
+            }
+        }
+        
+        vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    }
+}
+
 // 强实时大本营控制任务 (100Hz)
 void control_core_task(void *pvParameters) {
     dual_imu_data_t imu_data;
@@ -88,8 +141,14 @@ void app_main(void)
     
     ESP_LOGI(TAG, "SteadySail 就绪，当前模式: %d", CURRENT_RUN_MODE);
 
+    // ************ 如果是 IMU 专用测试模式 ************
+#if CURRENT_RUN_MODE == MODE_TEST_IMU_ONLY
+    ESP_LOGI(TAG, "🎯 IMU 测试模式 - 实时显示传感器数据");
+    xTaskCreatePinnedToCore(imu_test_task, "imu_test_task", 4096, NULL, 5, NULL, 1);
+    while(1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+
     // ************ 如果是 专用的大电机 ESC 校准模式 ************
-#if CURRENT_RUN_MODE == MODE_CALIBRATE_ESC
+#elif CURRENT_RUN_MODE == MODE_CALIBRATE_ESC
     ESP_LOGW(TAG, "注意: 当前运行于大电机校准模式！");
     xTaskCreatePinnedToCore(motor_control_esc_calibrate_task, "esc_calibrate_task", 8192, NULL, 5, NULL, 1);
     // 校准模式下只运行ESC任务，永远不会到达下面的代码

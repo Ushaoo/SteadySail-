@@ -47,8 +47,10 @@ void balance_controller_init(void) {
 
 void balance_controller_update(dual_imu_data_t *imu_data, balance_state_t *state) {
     // **********************************************
-    // 1. 双 IMU 数据融合 (方差加权 + Mahony 滤波)
+    // 1. IMU 数据融合处理
     // **********************************************
+#if USE_DUAL_IMU
+    // ========== 双 IMU 模式：方差加权融合 ==========
     // 简单指数移动方差更新 (模拟 100个样本缓冲区的实时方差)
     imu1_var = 0.95f * imu1_var + 0.05f * (imu_data->imu1.gyro_x * imu_data->imu1.gyro_x);
     imu2_var = 0.95f * imu2_var + 0.05f * (imu_data->imu2.gyro_x * imu_data->imu2.gyro_x);
@@ -73,6 +75,19 @@ void balance_controller_update(dual_imu_data_t *imu_data, balance_state_t *state
     float gx = w1 * imu_data->imu1.gyro_x + w2 * imu_data->imu2.gyro_x;
     float gy = w1 * imu_data->imu1.gyro_y + w2 * imu_data->imu2.gyro_y;
     float gz = w1 * imu_data->imu1.gyro_z + w2 * imu_data->imu2.gyro_z;
+#else
+    // ========== 单 IMU 模式：直接使用传感器数据 ==========
+    float ax = imu_data->imu1.accel_x;
+    float ay = imu_data->imu1.accel_y;
+    float az = imu_data->imu1.accel_z;
+    
+    float norm = sqrtf(ax*ax + ay*ay + az*az);
+    if (norm > 0.01f) { ax /= norm; ay /= norm; az /= norm; }
+    
+    float gx = imu_data->imu1.gyro_x;
+    float gy = imu_data->imu1.gyro_y;
+    float gz = imu_data->imu1.gyro_z;
+#endif
 
     // 转弧度进行 Mahony 更新
     float gx_rad = gx * M_PI / 180.0f;
@@ -87,7 +102,14 @@ void balance_controller_update(dual_imu_data_t *imu_data, balance_state_t *state
     float ey = az * vx - ax * vz;
     float ez = ax * vy - ay * vx;
 
+#if USE_DUAL_IMU
+    // 双IMU模式：使用加速度误差自适应增益
     float Kp_mahony = 2.0f + 25.0f * acc_error;
+#else
+    // 单IMU模式：固定增益
+    float Kp_mahony = 2.0f;
+#endif
+    
     gx_rad += Kp_mahony * ex;
     gy_rad += Kp_mahony * ey;
     gz_rad += Kp_mahony * ez;

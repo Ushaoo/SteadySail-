@@ -9,9 +9,10 @@
 #define MODE_TEST_BALANCE_ONLY   2  // 纯平衡测试：小电机锁定垂直，仅测试大电机防翻滚
 #define MODE_FULL_INTEGRATION    3  // 终极联动：指定推力角 + 主推力补偿
 #define MODE_CALIBRATE_ESC       4  // ✨大电机电调校准模式：1000->2000->1000 循环扫描
+#define MODE_TEST_IMU_ONLY       5  // 🎯IMU 数据专用测试：实时打印原始和融合数据
 
 // 当前激活的模式 (编译前修改这里)
-#define CURRENT_RUN_MODE   MODE_CALIBRATE_ESC
+#define CURRENT_RUN_MODE   MODE_TEST_IMU_ONLY
 
 // ==========================================
 // 2. 硬件引脚分配 (10 个核心 GPIO)
@@ -36,14 +37,21 @@
 #define PIN_THRUST_RIGHT 19
 
 // ==========================================
-// 3. 安全保护机制开关
+// 3. IMU 配置开关 (单/双 IMU 切换)
+// ==========================================
+#define USE_DUAL_IMU           0    // 0=单IMU测试版本, 1=双IMU融合版本
+                                     // 单IMU模式使用 I2C0 (GPIO 8/9)
+                                     // 后续购买支持改地址的IMU时改为1
+
+// ==========================================
+// 4. 安全保护机制开关
 // ==========================================
 #define ENABLE_I2C_RECOVERY    1    // 开启 I2C 错误重试与自救
 #define ENABLE_EMERGENCY_STOP  1    // 开启倾角过大断电保护 (>60度)
 #define I2C_RETRY_COUNT        3    // I2C 失败重试次数
 
 // ==========================================
-// 4. 物理与控制参数 (原 Python 映射)
+// 5. 物理与控制参数 (原 Python 映射)
 // ==========================================
 #define CONTROL_DT          0.01f   // 主控制循环时间 (s) -> 100Hz
 #define SYS_MASS            80.0f   // kg

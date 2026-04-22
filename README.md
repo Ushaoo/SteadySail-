@@ -572,6 +572,67 @@ PID参数：
   - C/C++ extension (by Microsoft)
   - Python 3.8+
 
+### 单/双 IMU 切换说明
+
+**当前状态**：项目已配置为**单 IMU 测试版本**
+
+#### 切换到单 IMU 模式（仅连接一个 MPU-6050）
+
+```c
+// 编辑 main/system_config.h，确保：
+#define USE_DUAL_IMU           0    // ← 设为 0（单IMU）
+
+// 硬件连接：
+// GPIO 8  (SDA) ──┬─ MPU-6050 (地址 0x68)
+// GPIO 9  (SCL) ──┤
+// +3.3V ──────────┤
+// GND ────────────┴─
+
+// I2C1 的 GPIO 10/11 可以不连接（或用于其他用途）
+```
+
+**单 IMU 模式特点**：
+- 使用 I2C0 总线（GPIO 8/9）
+- 直接使用单个传感器数据，无融合
+- Mahony 算法固定增益（不自适应）
+- 适合快速测试和调试
+
+#### 升级到双 IMU 模式（需购买支持改地址的 MPU-6050）
+
+```c
+// 编辑 main/system_config.h，修改为：
+#define USE_DUAL_IMU           1    // ← 设为 1（双IMU）
+
+// 硬件连接：
+// I2C0 总线：
+// GPIO 8  (SDA) ──┬─ MPU-6050 (AD0=GND, 地址 0x68)
+// GPIO 9  (SCL) ──┤
+//
+// I2C1 总线：
+// GPIO 10 (SDA) ──┬─ MPU-6050 (AD0=VCC, 地址 0x69)
+// GPIO 11 (SCL) ──┤
+```
+
+**双 IMU 模式特点**：
+- 使用独立的 I2C0 和 I2C1 总线
+- 方差加权融合两个传感器
+- Mahony 算法自适应增益
+- 更强的抗干扰能力和冗余性
+
+#### 修改后重新构建
+
+```bash
+# 修改配置后，重新烧录
+idf.py build flash monitor
+
+# 启动输出会显示：
+# I (40) IMU_DRIVER: 单 MPU6050 (I2C0) 初始化成功！  ← 单IMU
+# 或
+# I (40) IMU_DRIVER: 双 MPU6050 初始化成功！         ← 双IMU
+```
+
+---
+
 ### 1. ESP-IDF 4.4 环境配置
 
 #### Windows（推荐使用 Installer）
