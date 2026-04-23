@@ -133,62 +133,61 @@ void control_core_task(void *pvParameters) {
                 steering_control_set_target(180.0f, 180.0f); // 翻车后舵机回正向下
                 steering_control_update(); 
             } else {
-                // ====== 核心：推力矢量融合解算 ======
+                // ====== 核心：反向推进平衡方案（相反垂直力矢量） ======
                 // 1. 获取目标前进推力幅值 (映射到 0~500 范围)
                 float H_thrust = (g_forward_thrust / 100.0f) * 500.0f;
-                // 或者说推力最大值就是 500，这是 PWM 从 1500 -> 2000 的最大增加量
                 
-                // 2. 获取目标垂直平衡推力 (假设 state.tau_total>0 时左倾，左边需要往下抗)
-                // 现有的 THRUST_SCALE 转换系数 
+                // 2. 获取平衡所需的竖直推力幅值（绝对值）
                 #define THRUST_SCALE 0.55f 
-                float V_diff = state.tau_total * THRUST_SCALE; 
+                float V_balance_abs = fabsf(state.tau_total) * THRUST_SCALE; 
                 
-                // 将垂直推力限制在非负区间 (电机只往外喷水)
-                // 正值：左边出力； 负值：右边出力
-                float V_L = V_diff > 0.0f ? V_diff : 0.0f;
-                float V_R = V_diff < 0.0f ? -V_diff : 0.0f;
+                // 3. 判断需要的反转状态
+                // tau_total > 0: 左倾，需要左推力向下、右推力向上
+                bool invert_L = state.tau_total < 0.0f;  // 右倾时左反转
+                bool invert_R = state.tau_total > 0.0f;  // 左倾时右反转
                 
-                // 3. --- 目标角度解算 ---
-                // atan2f(Horizontal, Vertical) 算出偏离垂直向下的角度
-                float theta_L_rad = atan2f(H_thrust, V_L);
-                float theta_R_rad = atan2f(H_thrust, V_R);
-                
+                // 4. 计算目标矢量角度（基于H_thrust和V_balance_abs）
+                // atan2f(Horizontal, Vertical) 算出偏离竖直的角度
+                float theta_L_rad = atan2f(H_thrust, V_balance_abs);
+                float theta_R_rad = atan2f(H_thrust, V_balance_abs);
                 float theta_L_deg = theta_L_rad * 180.0f / M_PI;
                 float theta_R_deg = theta_R_rad * 180.0f / M_PI;
                 
-                // 映射到左右舵机的物理角度 (左：180为向下，90为朝后；右：180为向下，270为朝后)
-                float target_angle_L = 180.0f - theta_L_deg; 
-                float target_angle_R = 180.0f + theta_R_deg; 
+                // 5. 映射到舵机物理角度
+                // 左：180为向下，减去角度得到斜向前下
+                // 右：180为向下，加上角度得到斜向前下（与左对称）
+                float target_angle_L = 180.0f - theta_L_deg;
+                float target_angle_R = 180.0f + theta_R_deg;
                 
-                // 4. --- 舵机指令平滑滤波 ---
+                // 6. 舵机指令平滑滤波
                 filter_target_L = filter_target_L * 0.9f + target_angle_L * 0.1f;
                 filter_target_R = filter_target_R * 0.9f + target_angle_R * 0.1f;
                 
                 steering_control_set_target(filter_target_L, filter_target_R);
                 
-                // 5. --- 目标标称推力幅值 ---
-                float T_L_target = sqrtf(V_L*V_L + H_thrust*H_thrust);
-                float T_R_target = sqrtf(V_R*V_R + H_thrust*H_thrust);
-                
-                // 6. --- 物理真实闭环：动态推力补偿 ---
-                // 获取当前喷嘴实际的倾斜角（偏离垂直 180 度的角）
-                float act_theta_L_deg = 180.0f - cur_steer_left; // 左边: 180为0, 90时为90
-                float act_theta_R_deg = cur_steer_right - 180.0f; // 右边: 180为0, 270时为90
+                // 7. 计算最终推力（结合实际舵机角度的闭环补偿）
+                float act_theta_L_deg = 180.0f - cur_steer_left;
+                float act_theta_R_deg = cur_steer_right - 180.0f;
                 
                 float cos_L = cosf(act_theta_L_deg * M_PI / 180.0f);
-                if (cos_L < 0.05f) cos_L = 0.05f; // 避免除零
-                float T_L_safe = V_L / cos_L;
-
                 float cos_R = cosf(act_theta_R_deg * M_PI / 180.0f);
-                if (cos_R < 0.05f) cos_R = 0.05f;
-                float T_R_safe = V_R / cos_R;
                 
-                // 最终推力取【物理延时补偿需求】和【目标矢量推力需求】的最大值，确保平衡垂直力只多不少
+                // 避免cos为0
+                if (cos_L < 0.05f) cos_L = 0.05f;
+                if (cos_R < 0.05f) cos_R = 0.05f;
+                
+                // 需要补偿舵机角度导致的推力衰减
+                float T_L_target = sqrtf(V_balance_abs*V_balance_abs + H_thrust*H_thrust);
+                float T_R_target = sqrtf(V_balance_abs*V_balance_abs + H_thrust*H_thrust);
+                
+                float T_L_safe = V_balance_abs / cos_L;
+                float T_R_safe = V_balance_abs / cos_R;
+                
                 float T_L_final = fmaxf(T_L_target, T_L_safe);
                 float T_R_final = fmaxf(T_R_target, T_R_safe);
                 
-                // 下发至大电机
-                motor_control_set_pwm_vector(T_L_final, T_R_final);
+                // 8. 下发反向推力指令
+                motor_control_set_pwm_bidirectional(T_L_final, T_R_final, invert_L, invert_R);
             }
         } else {
             // I2C 读取失败保护
@@ -197,14 +196,51 @@ void control_core_task(void *pvParameters) {
             motor_control_emergency_stop();
         }
 
+        // ====== 编码器故障检测与处理 ======
+        static bool enc_left_fault = false, enc_right_fault = false;
+        static uint32_t enc_fault_warn_time = 0;
+        bool enc_left_ok, enc_right_ok;
+        steering_control_get_encoder_status(&enc_left_ok, &enc_right_ok);
+        
+        // 检测故障状态变化
+        if (!enc_left_ok && !enc_left_fault) {
+            enc_left_fault = true;
+            ESP_LOGE(TAG, "🚨 LEFT ENCODER DISCONNECTED! Locking left servo position.");
+            enc_fault_warn_time = xTaskGetTickCount();
+        }
+        if (!enc_right_ok && !enc_right_fault) {
+            enc_right_fault = true;
+            ESP_LOGE(TAG, "🚨 RIGHT ENCODER DISCONNECTED! Locking right servo position.");
+            enc_fault_warn_time = xTaskGetTickCount();
+        }
+        
+        // 恢复故障状态
+        if (enc_left_ok && enc_left_fault) {
+            enc_left_fault = false;
+            ESP_LOGI(TAG, "✓ LEFT ENCODER RECOVERED!");
+        }
+        if (enc_right_ok && enc_right_fault) {
+            enc_right_fault = false;
+            ESP_LOGI(TAG, "✓ RIGHT ENCODER RECOVERED!");
+        }
+        
+        // 定期提示故障状态
+        if ((enc_left_fault || enc_right_fault) && xTaskGetTickCount() - enc_fault_warn_time > pdMS_TO_TICKS(5000)) {
+            ESP_LOGW(TAG, "Encoder status - Left:%s Right:%s", 
+                     enc_left_fault ? "FAULT" : "OK", enc_right_fault ? "FAULT" : "OK");
+            enc_fault_warn_time = xTaskGetTickCount();
+        }
+
         // 统一更新小电机位置 (下发滤波后的 PWM)
         steering_control_update(); 
 
         // 串口实时数据监测 (每 10 帧打一条，10Hz)
         static int print_cnt = 0;
         if (++print_cnt >= 10) { 
-            printf("Fwd:%.1f%% | TgtL:%.1f (Act:%.1f) | TgtR:%.1f (Act:%.1f) | Roll:%.2f\n", 
-                   g_forward_thrust, filter_target_L, cur_steer_left, filter_target_R, cur_steer_right, state.roll_deg);
+            printf("Fwd:%.1f%% | TgtL:%.1f (Act:%.1f) | TgtR:%.1f (Act:%.1f) | Roll:%.2f | Invert:%d/%d | Enc:%s/%s\n", 
+                   g_forward_thrust, filter_target_L, cur_steer_left, filter_target_R, cur_steer_right, 
+                   state.roll_deg, (state.tau_total > 0 ? 0 : 1), (state.tau_total > 0 ? 1 : 0),
+                   enc_left_fault ? "X" : "✓", enc_right_fault ? "X" : "✓");
             print_cnt = 0;
         }
 

@@ -17,6 +17,9 @@ void steering_control_set_target(float target_left_deg, float target_right_deg);
 // 获取目前的实时物理角度
 void steering_control_get_current_angles(float *left_deg, float *right_deg);
 
+// 获取编码器健康状态 (true = 正常, false = 故障/断连)
+void steering_control_get_encoder_status(bool *left_ok, bool *right_ok);
+
 // 执行一次 PID 计算并输出到 PWM。需放置于 100Hz 定时任务中！
 void steering_control_update(void);
 

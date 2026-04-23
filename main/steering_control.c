@@ -148,6 +148,12 @@ void steering_control_get_current_angles(float *left_deg, float *right_deg) {
     *right_deg = raw_right;
 }
 
+// 获取编码器健康状态
+void steering_control_get_encoder_status(bool *left_ok, bool *right_ok) {
+    *left_ok = enc_left.valid;
+    *right_ok = enc_right.valid;
+}
+
 // 提取单边 PID 计算
 static float calculate_pid(float error, float *integral, float *prev_error, float *out_filt) {
     const float kp = 5.0f, ki = 1.0f, kd = 0.49f, dt = 0.01f;

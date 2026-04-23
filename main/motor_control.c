@@ -146,6 +146,56 @@ void motor_control_set_steering_pwm(uint32_t pwm_left_us, uint32_t pwm_right_us)
 
 #define THRUST_SCALE 0.55f   // 力矩转 PWM 的比例系数（源自 Python）
 
+// ===== 双向推力下发（支持反转）=====
+void motor_control_set_pwm_bidirectional(float push_L, float push_R, bool invert_L, bool invert_R) {
+    // 限幅：推力范围 0 ~ 500
+    if (push_L < 0.0f) push_L = 0.0f;
+    if (push_L > 500.0f) push_L = 500.0f;
+    if (push_R < 0.0f) push_R = 0.0f;
+    if (push_R > 500.0f) push_R = 500.0f;
+
+    // 降低到 50%
+    push_L *= 0.5f;
+    push_R *= 0.5f;
+
+    // ===== 低通滤波：平滑PWM输出 =====
+    static float filtered_push_L = 0.0f, filtered_push_R = 0.0f;
+    const float FILTER_ALPHA = 0.3f;
+    
+    filtered_push_L = filtered_push_L * (1.0f - FILTER_ALPHA) + push_L * FILTER_ALPHA;
+    filtered_push_R = filtered_push_R * (1.0f - FILTER_ALPHA) + push_R * FILTER_ALPHA;
+
+    // 计算脉宽：正向 = 1500 + push，反向 = 3000 - (1500 + push) = 1500 - push
+    uint32_t thrust_L = invert_L ? 
+        (uint32_t)(1500.0f - filtered_push_L) : 
+        (uint32_t)(1500.0f + filtered_push_L);
+    
+    uint32_t thrust_R = invert_R ? 
+        (uint32_t)(1500.0f - filtered_push_R) : 
+        (uint32_t)(1500.0f + filtered_push_R);
+
+#if CURRENT_RUN_MODE == MODE_TEST_SENSORS || CURRENT_RUN_MODE == MODE_TEST_STEERING_ONLY
+    // 测试模式：禁用推进
+    thrust_L = 1500;
+    thrust_R = 1500;
+#endif
+
+    // 安全限制：PWM 范围 [1000, 2000]
+    thrust_L = (thrust_L < 1000) ? 1000 : (thrust_L > 2000) ? 2000 : thrust_L;
+    thrust_R = (thrust_R < 1000) ? 1000 : (thrust_R > 2000) ? 2000 : thrust_R;
+    
+    // 下发 LEDC
+    uint32_t duty_L = us_to_duty(thrust_L);
+    uint32_t duty_R = us_to_duty(thrust_R);
+    
+    ledc_set_duty(LEDC_MODE, THRUST_LEFT_CHANNEL, duty_L);
+    ledc_update_duty(LEDC_MODE, THRUST_LEFT_CHANNEL);
+    ledc_set_duty(LEDC_MODE, THRUST_RIGHT_CHANNEL, duty_R);
+    ledc_update_duty(LEDC_MODE, THRUST_RIGHT_CHANNEL);
+    
+    vTaskDelay(pdMS_TO_TICKS(30));
+}
+
 // ===== 闭环矢量推力下发 =====
 void motor_control_set_pwm_vector(float pwm_L, float pwm_R) {
     // 基础限幅 (0 ~ 500 表示 1500us ~ 2000us 的推进范围，不支持负数即反转)
