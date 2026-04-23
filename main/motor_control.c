@@ -25,6 +25,10 @@ static const char *TAG = "MOTOR";
 #define THRUST_LEFT_CHANNEL      LEDC_CHANNEL_2
 #define THRUST_RIGHT_CHANNEL     LEDC_CHANNEL_3
 
+// 保存最后下发的实际 PWM 脉宽值
+static uint32_t last_pwm_left_us = 1500;
+static uint32_t last_pwm_right_us = 1500;
+
 // 将微秒脉宽转为 LEDC 控制寄存器的占空比值
 // 50Hz频率 -> 周期20000us，14位分辨率 -> 0~16383
 // 公式: duty = (us / 20000) * 16384 = (us * 16384) / 20000
@@ -180,9 +184,13 @@ void motor_control_set_pwm_bidirectional(float push_L, float push_R, bool invert
     thrust_R = 1500;
 #endif
 
-    // 安全限制：PWM 范围 [1000, 2000]
-    thrust_L = (thrust_L < 1000) ? 1000 : (thrust_L > 2000) ? 2000 : thrust_L;
-    thrust_R = (thrust_R < 1000) ? 1000 : (thrust_R > 2000) ? 2000 : thrust_R;
+    // 安全限制：PWM 范围 [1450, 1550] (相对中立1500的±50范围)
+    thrust_L = (thrust_L < 1400) ? 1400 : (thrust_L > 1600) ? 1600 : thrust_L;
+    thrust_R = (thrust_R < 1400) ? 1400 : (thrust_R > 1600) ? 1600 : thrust_R;
+    
+    // 保存实际下发的PWM值
+    last_pwm_left_us = thrust_L;
+    last_pwm_right_us = thrust_R;
     
     // 下发 LEDC
     uint32_t duty_L = us_to_duty(thrust_L);
@@ -204,8 +212,6 @@ void motor_control_set_pwm_vector(float pwm_L, float pwm_R) {
     
     if (pwm_R < 0.0f) pwm_R = 0.0f;
     if (pwm_R > 500.0f) pwm_R = 500.0f;
-    pwm_L *= 0.5f;  // 降低到70%
-    pwm_R *= 0.5f;
 
     // ===== 低通滤波：平滑PWM输出，避免频繁切换 =====
     static float filtered_pwm_L = 0.0f, filtered_pwm_R = 0.0f;
@@ -214,6 +220,7 @@ void motor_control_set_pwm_vector(float pwm_L, float pwm_R) {
     filtered_pwm_L = filtered_pwm_L * (1.0f - FILTER_ALPHA) + pwm_L * FILTER_ALPHA;
     filtered_pwm_R = filtered_pwm_R * (1.0f - FILTER_ALPHA) + pwm_R * FILTER_ALPHA;
 
+    
     uint32_t thrust_L = (uint32_t)(1500.0f + filtered_pwm_L);
     uint32_t thrust_R = (uint32_t)(1500.0f + filtered_pwm_R);
 
@@ -223,10 +230,10 @@ void motor_control_set_pwm_vector(float pwm_L, float pwm_R) {
     thrust_R = 1500;
 #endif
 
-    // 绝对安全限制：PWM 不得越界
-    thrust_L = (thrust_L < 1000) ? 1000 : (thrust_L > 2000) ? 2000 : thrust_L;
-    thrust_R = (thrust_R < 1000) ? 1000 : (thrust_R > 2000) ? 2000 : thrust_R;
-    
+    // 绝对安全限制：PWM 范围 [1450, 1550] (相对中立1500的±50范围)
+    thrust_L = (thrust_L < 1450) ? 1450 : (thrust_L > 1550) ? 1550 : thrust_L;
+    thrust_R = (thrust_R < 1450) ? 1450 : (thrust_R > 1550) ? 1550 : thrust_R;
+
     // 直接操作 LEDC
     uint32_t duty_L = us_to_duty(thrust_L);
     uint32_t duty_R = us_to_duty(thrust_R);
@@ -237,6 +244,11 @@ void motor_control_set_pwm_vector(float pwm_L, float pwm_R) {
     ledc_update_duty(LEDC_MODE, THRUST_RIGHT_CHANNEL);
     
     vTaskDelay(pdMS_TO_TICKS(30));
+}
+
+void motor_control_get_last_pwm(uint32_t *pwm_left_us, uint32_t *pwm_right_us) {
+    if (pwm_left_us) *pwm_left_us = last_pwm_left_us;
+    if (pwm_right_us) *pwm_right_us = last_pwm_right_us;
 }
 
 void motor_control_emergency_stop(void) {

@@ -22,6 +22,9 @@ void motor_control_set_pwm_vector(float pwm_L, float pwm_R);
 // 使用方法：平衡时左正转右反转/左反转右正转，两边相反推力产生平衡力矩
 void motor_control_set_pwm_bidirectional(float push_L, float push_R, bool invert_L, bool invert_R);
 
+// 获取最后下发的实际 PWM 脉宽（单位：us，范围 1000-2000）
+void motor_control_get_last_pwm(uint32_t *pwm_left_us, uint32_t *pwm_right_us);
+
 // 紧急停止所有输出 (切回 1500 停转)
 void motor_control_emergency_stop(void);
 

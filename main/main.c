@@ -115,6 +115,10 @@ void control_core_task(void *pvParameters) {
     // 低通滤波平滑目标角度 (避免舵机高频抖动)
     static float filter_target_L = 180.0f;
     static float filter_target_R = 180.0f;
+    
+    // 保存最后的平衡参数用于显示
+    static float last_tau_total = 0.0f;
+    static float last_V_balance = 0.0f;
 
     while (1) {
         // 获取当前的物理真实角度
@@ -186,6 +190,10 @@ void control_core_task(void *pvParameters) {
                 float T_L_final = fmaxf(T_L_target, T_L_safe);
                 float T_R_final = fmaxf(T_R_target, T_R_safe);
                 
+                // 保存平衡参数用于串口输出显示
+                last_tau_total = state.tau_total;
+                last_V_balance = V_balance_abs;
+                
                 // 8. 下发反向推力指令
                 motor_control_set_pwm_bidirectional(T_L_final, T_R_final, invert_L, invert_R);
             }
@@ -237,9 +245,14 @@ void control_core_task(void *pvParameters) {
         // 串口实时数据监测 (每 10 帧打一条，10Hz)
         static int print_cnt = 0;
         if (++print_cnt >= 10) { 
-            printf("Fwd:%.1f%% | TgtL:%.1f (Act:%.1f) | TgtR:%.1f (Act:%.1f) | Roll:%.2f | Invert:%d/%d | Enc:%s/%s\n", 
+            // 获取实际下发的 PWM 脉宽
+            uint32_t actual_pwm_L, actual_pwm_R;
+            motor_control_get_last_pwm(&actual_pwm_L, &actual_pwm_R);
+            
+            printf("Fwd:%.1f%% | TgtL:%.1f (Act:%.1f) | TgtR:%.1f (Act:%.1f) | Roll:%.2f | PWM_L:%u PWM_R:%u | Tau:%.0f V_bal:%.0f | Invert:%d/%d | Enc:%s/%s\n", 
                    g_forward_thrust, filter_target_L, cur_steer_left, filter_target_R, cur_steer_right, 
-                   state.roll_deg, (state.tau_total > 0 ? 0 : 1), (state.tau_total > 0 ? 1 : 0),
+                   state.roll_deg, actual_pwm_L, actual_pwm_R, last_tau_total, last_V_balance,
+                   (state.tau_total > 0 ? 0 : 1), (state.tau_total > 0 ? 1 : 0),
                    enc_left_fault ? "X" : "✓", enc_right_fault ? "X" : "✓");
             print_cnt = 0;
         }
