@@ -89,6 +89,35 @@ void motor_control_init(void) {
     
     vTaskDelay(pdMS_TO_TICKS(50));
     
+    // 4. 小电机校准信号：高点 -> 低点 -> 中立（不旋转）
+    ESP_LOGI(TAG, "Calibration sequence for steering servo...");
+    
+    // 高点信号 (2000 us)
+    uint32_t duty_max = us_to_duty(2000);
+    ledc_set_duty(LEDC_MODE, STEER_LEFT_CHANNEL, duty_max);
+    ledc_update_duty(LEDC_MODE, STEER_LEFT_CHANNEL);
+    ledc_set_duty(LEDC_MODE, STEER_RIGHT_CHANNEL, duty_max);
+    ledc_update_duty(LEDC_MODE, STEER_RIGHT_CHANNEL);
+    ESP_LOGI(TAG, "Sent MAX signal (2000us) for 500ms");
+    vTaskDelay(pdMS_TO_TICKS(5));
+    
+    // 低点信号 (1000 us)
+    uint32_t duty_min = us_to_duty(1000);
+    ledc_set_duty(LEDC_MODE, STEER_LEFT_CHANNEL, duty_min);
+    ledc_update_duty(LEDC_MODE, STEER_LEFT_CHANNEL);
+    ledc_set_duty(LEDC_MODE, STEER_RIGHT_CHANNEL, duty_min);
+    ledc_update_duty(LEDC_MODE, STEER_RIGHT_CHANNEL);
+    ESP_LOGI(TAG, "Sent MIN signal (1000us) for 500ms");
+    vTaskDelay(pdMS_TO_TICKS(5));
+    
+    // 回到中立位置
+    ledc_set_duty(LEDC_MODE, STEER_LEFT_CHANNEL, duty_neutral);
+    ledc_update_duty(LEDC_MODE, STEER_LEFT_CHANNEL);
+    ledc_set_duty(LEDC_MODE, STEER_RIGHT_CHANNEL, duty_neutral);
+    ledc_update_duty(LEDC_MODE, STEER_RIGHT_CHANNEL);
+    ESP_LOGI(TAG, "Returned to NEUTRAL (1500us)");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    
     ESP_LOGI(TAG, "=== Motor Control Initialized Successfully! ===");
 }
 
@@ -117,32 +146,26 @@ void motor_control_set_steering_pwm(uint32_t pwm_left_us, uint32_t pwm_right_us)
 
 #define THRUST_SCALE 0.55f   // 力矩转 PWM 的比例系数（源自 Python）
 
-void motor_control_set_thrust_with_compensation(float tau_total, float current_angle_deg) {
-    float final_tau = tau_total;
-
-    // 核心联动：如果小电机已经旋转，推力在垂直法线的分量会被削弱，需通过除以 cos 放大主推力进行补偿
-    // 为避免 cos(90度)=0 死结，将最大补偿角度钳位于 60 度 (cos60 = 0.5)
-    float clamped_angle = current_angle_deg;
-    if (clamped_angle > 60.0f) clamped_angle = 60.0f;
-    if (clamped_angle < -60.0f) clamped_angle = -60.0f;
-
-    // TODO: 注意根据两侧偏角如果是独立控制的，可能需要分别补偿，但我们这里以同向平衡假设为例
-    float cos_alpha = cosf(clamped_angle * M_PI / 180.0f);
-    // 当 cos_alpha 为 0.5 时，final_tau 放大 2 倍
-    if (cos_alpha > 0.05f) {
-        final_tau = tau_total / cos_alpha;
-    }
-
-    // 转为 PWM 变化量
-    float pwm_adjust = final_tau * THRUST_SCALE;
+// ===== 闭环矢量推力下发 =====
+void motor_control_set_pwm_vector(float pwm_L, float pwm_R) {
+    // 基础限幅 (0 ~ 500 表示 1500us ~ 2000us 的推进范围，不支持负数即反转)
+    if (pwm_L < 0.0f) pwm_L = 0.0f;
+    if (pwm_L > 500.0f) pwm_L = 500.0f;
     
-    // 安全钳位 +/- 500 (对应 1000 到 2000 的最大区间)
-    if (pwm_adjust > 500.0f) pwm_adjust = 500.0f;
-    if (pwm_adjust < -500.0f) pwm_adjust = -500.0f;
+    if (pwm_R < 0.0f) pwm_R = 0.0f;
+    if (pwm_R > 500.0f) pwm_R = 500.0f;
+    pwm_L *= 0.5f;  // 降低到70%
+    pwm_R *= 0.5f;
 
-    // 左边电机加力，右边电机减力产生力偶矩 (假设翻滚响应为：左强右弱往右翻)
-    uint32_t thrust_L = (uint32_t)(1500.0f + pwm_adjust);
-    uint32_t thrust_R = (uint32_t)(1500.0f - pwm_adjust);
+    // ===== 低通滤波：平滑PWM输出，避免频繁切换 =====
+    static float filtered_pwm_L = 0.0f, filtered_pwm_R = 0.0f;
+    const float FILTER_ALPHA = 0.3f;  // 0.3 = 70% 旧值 + 30% 新值，平滑但响应快
+    
+    filtered_pwm_L = filtered_pwm_L * (1.0f - FILTER_ALPHA) + pwm_L * FILTER_ALPHA;
+    filtered_pwm_R = filtered_pwm_R * (1.0f - FILTER_ALPHA) + pwm_R * FILTER_ALPHA;
+
+    uint32_t thrust_L = (uint32_t)(1500.0f + filtered_pwm_L);
+    uint32_t thrust_R = (uint32_t)(1500.0f + filtered_pwm_R);
 
 #if CURRENT_RUN_MODE == MODE_TEST_SENSORS || CURRENT_RUN_MODE == MODE_TEST_STEERING_ONLY
     // 如果系统不需要开主推进，强制闭锁推力处于中立！
@@ -150,7 +173,7 @@ void motor_control_set_thrust_with_compensation(float tau_total, float current_a
     thrust_R = 1500;
 #endif
 
-    // 限制脉宽范围
+    // 绝对安全限制：PWM 不得越界
     thrust_L = (thrust_L < 1000) ? 1000 : (thrust_L > 2000) ? 2000 : thrust_L;
     thrust_R = (thrust_R < 1000) ? 1000 : (thrust_R > 2000) ? 2000 : thrust_R;
     

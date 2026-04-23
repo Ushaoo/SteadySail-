@@ -12,7 +12,15 @@
 #define MODE_TEST_IMU_ONLY       5  // 🎯IMU 数据专用测试：实时打印原始和融合数据
 
 // 当前激活的模式 (编译前修改这里)
-#define CURRENT_RUN_MODE   MODE_TEST_IMU_ONLY
+#define CURRENT_RUN_MODE   MODE_FULL_INTEGRATION 
+// ==========================================
+// 1.5. 转向控制模式开关
+// ==========================================
+#define STEERING_MODE_PID        0  // 使用 PID 控制（精确但容易振荡）
+#define STEERING_MODE_DIRECT     1  // 直接映射模式（简单，误差直接转 PWM）
+
+// 当前转向模式 (改这里切换)
+#define STEERING_CONTROL_MODE    STEERING_MODE_PID
 
 // ==========================================
 // 2. 硬件引脚分配 (10 个核心 GPIO)

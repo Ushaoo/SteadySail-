@@ -7,9 +7,14 @@ static float q0 = 1.0f, q1 = 0.0f, q2 = 0.0f, q3 = 0.0f;
 static float prev_omega_filtered = 0.0f;
 static float pid_integral = 0.0f;
 
+// 陀螺仪零偏校准
+static float gyro_bias_x = 0.0f, gyro_bias_y = 0.0f, gyro_bias_z = 0.0f;
+static int gyro_calibration_counter = 0;
+#define GYRO_CALIBRATION_SAMPLES 200  // 2秒内收集200个样本校准零偏
+
 #define ALPHA_ACC  0.98f
 #define WEIGHT_DYN 0.8f
-#define ALPHA_EMA  0.15f
+#define ALPHA_EMA  0.7f
 #define K_SELF     100.0f
 #define INERTIA    (SYS_MASS * (SYS_WIDTH / 2.0f) * (SYS_WIDTH / 2.0f) / 3.0f) // 近似转动惯量 2.4
 
@@ -47,6 +52,42 @@ void balance_controller_init(void) {
 
 void balance_controller_update(dual_imu_data_t *imu_data, balance_state_t *state) {
     // **********************************************
+    // 0. 陀螺仪零偏自动校准阶段（启动后2秒内）
+    // **********************************************
+    if (gyro_calibration_counter < GYRO_CALIBRATION_SAMPLES) {
+        // 累积阶段：静止状态下收集陀螺仪数据
+#if USE_DUAL_IMU
+        gyro_bias_x += (imu_data->imu1.gyro_x + imu_data->imu2.gyro_x) * 0.5f;
+        gyro_bias_y += (imu_data->imu1.gyro_y + imu_data->imu2.gyro_y) * 0.5f;
+        gyro_bias_z += (imu_data->imu1.gyro_z + imu_data->imu2.gyro_z) * 0.5f;
+#else
+        gyro_bias_x += imu_data->imu1.gyro_x;
+        gyro_bias_y += imu_data->imu1.gyro_y;
+        gyro_bias_z += imu_data->imu1.gyro_z;
+#endif
+        gyro_calibration_counter++;
+        
+        // 校准完成：计算平均偏差
+        if (gyro_calibration_counter == GYRO_CALIBRATION_SAMPLES) {
+            gyro_bias_x /= GYRO_CALIBRATION_SAMPLES;
+            gyro_bias_y /= GYRO_CALIBRATION_SAMPLES;
+            gyro_bias_z /= GYRO_CALIBRATION_SAMPLES;
+            // 校准完成后不再进入此分支
+        }
+        
+        // 校准期间返回中立状态
+        state->roll_deg = 0.0f;
+        state->pitch_deg = 0.0f;
+        state->yaw_deg = 0.0f;
+        state->omega_filtered = 0.0f;
+        state->alpha = 0.0f;
+        state->tau_ff = 0.0f;
+        state->tau_pid = 0.0f;
+        state->tau_total = 0.0f;
+        return;
+    }
+    
+    // **********************************************
     // 1. IMU 数据融合处理
     // **********************************************
 #if USE_DUAL_IMU
@@ -72,9 +113,10 @@ void balance_controller_update(dual_imu_data_t *imu_data, balance_state_t *state
     if (acc_error > 0.3f) w1 = (inv_var1 > inv_var2) ? WEIGHT_DYN : (1.0f - WEIGHT_DYN);
     float w2 = 1.0f - w1;
 
-    float gx = w1 * imu_data->imu1.gyro_x + w2 * imu_data->imu2.gyro_x;
-    float gy = w1 * imu_data->imu1.gyro_y + w2 * imu_data->imu2.gyro_y;
-    float gz = w1 * imu_data->imu1.gyro_z + w2 * imu_data->imu2.gyro_z;
+    // 减去陀螺仪零偏
+    float gx = (w1 * imu_data->imu1.gyro_x + w2 * imu_data->imu2.gyro_x) - gyro_bias_x;
+    float gy = (w1 * imu_data->imu1.gyro_y + w2 * imu_data->imu2.gyro_y) - gyro_bias_y;
+    float gz = (w1 * imu_data->imu1.gyro_z + w2 * imu_data->imu2.gyro_z) - gyro_bias_z;
 #else
     // ========== 单 IMU 模式：直接使用传感器数据 ==========
     float ax = imu_data->imu1.accel_x;
@@ -84,9 +126,10 @@ void balance_controller_update(dual_imu_data_t *imu_data, balance_state_t *state
     float norm = sqrtf(ax*ax + ay*ay + az*az);
     if (norm > 0.01f) { ax /= norm; ay /= norm; az /= norm; }
     
-    float gx = imu_data->imu1.gyro_x;
-    float gy = imu_data->imu1.gyro_y;
-    float gz = imu_data->imu1.gyro_z;
+    // 减去陀螺仪零偏
+    float gx = imu_data->imu1.gyro_x - gyro_bias_x;
+    float gy = imu_data->imu1.gyro_y - gyro_bias_y;
+    float gz = imu_data->imu1.gyro_z - gyro_bias_z;
 #endif
 
     // 转弧度进行 Mahony 更新
@@ -104,10 +147,10 @@ void balance_controller_update(dual_imu_data_t *imu_data, balance_state_t *state
 
 #if USE_DUAL_IMU
     // 双IMU模式：使用加速度误差自适应增益
-    float Kp_mahony = 2.0f + 25.0f * acc_error;
+    float Kp_mahony = 5.0f + 35.0f * acc_error;
 #else
-    // 单IMU模式：固定增益
-    float Kp_mahony = 2.0f;
+    // 单IMU模式：激进加速度计修正（30.0可快速消除陀螺仪漂移）
+    float Kp_mahony = 30.0f;
 #endif
     
     gx_rad += Kp_mahony * ex;
@@ -181,10 +224,35 @@ void balance_controller_update(dual_imu_data_t *imu_data, balance_state_t *state
     // [总力矩与系统级死区平滑衰减]
     float tau_total = FEEDFORWARD_PARAM * state->tau_ff - FEEDBACK_PARAM * state->tau_pid;
 
-    float angle_factor = apply_deadzone_smooth(theta, ANGLE_DEADZONE, ANGLE_DEADZONE_SOFT) / (fabsf(theta) + 1e-6f);
-    if (angle_factor > 1.0f) angle_factor = 1.0f; // 缩放范围 0 ~ 1
+    // ✅ 正确的死区因子计算（参考Python代码逻辑）
+    float abs_theta = fabsf(theta);
+    float angle_factor;
+    if (abs_theta < ANGLE_DEADZONE) {
+        angle_factor = 0.0f;  // 核心死区内完全衰减
+    } else if (abs_theta < ANGLE_DEADZONE_SOFT) {
+        // Smoothstep 过渡区间：线性插值到平滑曲线
+        float t = (abs_theta - ANGLE_DEADZONE) / (ANGLE_DEADZONE_SOFT - ANGLE_DEADZONE);
+        angle_factor = t * t * (3.0f - 2.0f * t);  // smoothstep(t)
+    } else {
+        angle_factor = 1.0f;  // 软边界外完全输出
+    }
     
-    tau_total *= angle_factor;
+    // ✅ 角速度死区因子（只要一个量较大就输出）
+    float abs_omega = fabsf(omega);
+    float omega_factor;
+    if (abs_omega < 3.0f) {  // OMEGA_DEADZONE
+        omega_factor = 0.0f;
+    } else if (abs_omega < 6.0f) {  // OMEGA_DEADZONE_SOFT
+        float t = (abs_omega - 3.0f) / (6.0f - 3.0f);
+        omega_factor = t * t * (3.0f - 2.0f * t);
+    } else {
+        omega_factor = 1.0f;
+    }
+    
+    // 综合死区因子：取较大值（只要有一个量较大就输出）
+    float deadzone_factor = (angle_factor > omega_factor) ? angle_factor : omega_factor;
+    tau_total *= deadzone_factor;
+    
     state->tau_total = tau_total;
 }
 

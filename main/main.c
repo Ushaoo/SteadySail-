@@ -14,8 +14,8 @@
 
 static const char *TAG = "MAIN";
 
-// 键盘控制的全局目标转向角度
-static float g_steering_angle_deg = 180.0f;
+// 键盘控制的全局目标推力（前进为正，-100 到 100）
+static float g_forward_thrust = 0.0f;
 
 // IMU 专用测试任务 (100Hz)
 void imu_test_task(void *pvParameters) {
@@ -70,6 +70,39 @@ void imu_test_task(void *pvParameters) {
     }
 }
 
+// 测试专用目标角度
+static float g_test_steer_angle = 180.0f;
+
+// 转向机构只转测试任务 (100Hz)
+void steering_test_task(void *pvParameters) {
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    const TickType_t xFrequency = pdMS_TO_TICKS(10);
+
+    ESP_LOGI(TAG, "========== 独立转向机构测试模式 ==========");
+    ESP_LOGI(TAG, "串口输入数字直接设置舵机角度(90~270度)");
+
+    while(1) {
+        // 大电机强制安全停转
+        motor_control_emergency_stop();
+        
+        // 左右电机同步接受输入的测试角度
+        steering_control_set_target(g_test_steer_angle, g_test_steer_angle);
+        steering_control_update();
+
+        // 打印当前闭环数据
+        float act_L, act_R;
+        steering_control_get_current_angles(&act_L, &act_R);
+        
+        static int print_cnt = 0;
+        if (++print_cnt >= 20) { // 5Hz
+            printf("[转向测试] Target: %.1f° | 实际L: %.1f°, 实际R: %.1f°\n", g_test_steer_angle, act_L, act_R);
+            print_cnt = 0;
+        }
+
+        vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    }
+}
+
 // 强实时大本营控制任务 (100Hz)
 void control_core_task(void *pvParameters) {
     dual_imu_data_t imu_data;
@@ -79,46 +112,103 @@ void control_core_task(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xFrequency = pdMS_TO_TICKS(10); // 10ms = 100Hz
 
-    while (1) {
-        // --- 1. 更新小电机转向 PID 环 ---
-        // 任何情况下更新 steering target并进行短路径算计
-        steering_control_set_target(g_steering_angle_deg, g_steering_angle_deg);
-        steering_control_update(); 
+    // 低通滤波平滑目标角度 (避免舵机高频抖动)
+    static float filter_target_L = 180.0f;
+    static float filter_target_R = 180.0f;
 
-        // 提取目前的真实物理偏角用于主推进推力补偿
+    while (1) {
+        // 获取当前的物理真实角度
         float cur_steer_left, cur_steer_right;
         steering_control_get_current_angles(&cur_steer_left, &cur_steer_right);
-        float actual_thrust_angle = (cur_steer_left + cur_steer_right) / 2.0f;
 
-        // --- 2. 姿态平衡环 ---
+        // --- 姿态平衡环与推力矢量解算 ---
         if (imu_driver_read(&imu_data) == ESP_OK) {
             
-            // 将原始数据喂给算法，算出需要抵抗倾覆的力 tau_total
+            // 算出需要抵抗倾覆的垂直力矩 tau_total
             balance_controller_update(&imu_data, &state);
 
             // 紧急防翻车保护（超过设定的安全角度立刻停推）
             if (ENABLE_EMERGENCY_STOP && fabsf(state.roll_deg) > 60.0f) {
                 motor_control_emergency_stop();
+                steering_control_set_target(180.0f, 180.0f); // 翻车后舵机回正向下
+                steering_control_update(); 
             } else {
-                // 3. 终极联动：将理论平衡力 tau_total 除以当前转角余弦 actual_thrust_angle，输出信号
-                motor_control_set_thrust_with_compensation(state.tau_total, actual_thrust_angle);
+                // ====== 核心：推力矢量融合解算 ======
+                // 1. 获取目标前进推力幅值 (映射到 0~500 范围)
+                float H_thrust = (g_forward_thrust / 100.0f) * 500.0f;
+                // 或者说推力最大值就是 500，这是 PWM 从 1500 -> 2000 的最大增加量
+                
+                // 2. 获取目标垂直平衡推力 (假设 state.tau_total>0 时左倾，左边需要往下抗)
+                // 现有的 THRUST_SCALE 转换系数 
+                #define THRUST_SCALE 0.55f 
+                float V_diff = state.tau_total * THRUST_SCALE; 
+                
+                // 将垂直推力限制在非负区间 (电机只往外喷水)
+                // 正值：左边出力； 负值：右边出力
+                float V_L = V_diff > 0.0f ? V_diff : 0.0f;
+                float V_R = V_diff < 0.0f ? -V_diff : 0.0f;
+                
+                // 3. --- 目标角度解算 ---
+                // atan2f(Horizontal, Vertical) 算出偏离垂直向下的角度
+                float theta_L_rad = atan2f(H_thrust, V_L);
+                float theta_R_rad = atan2f(H_thrust, V_R);
+                
+                float theta_L_deg = theta_L_rad * 180.0f / M_PI;
+                float theta_R_deg = theta_R_rad * 180.0f / M_PI;
+                
+                // 映射到左右舵机的物理角度 (左：180为向下，90为朝后；右：180为向下，270为朝后)
+                float target_angle_L = 180.0f - theta_L_deg; 
+                float target_angle_R = 180.0f + theta_R_deg; 
+                
+                // 4. --- 舵机指令平滑滤波 ---
+                filter_target_L = filter_target_L * 0.9f + target_angle_L * 0.1f;
+                filter_target_R = filter_target_R * 0.9f + target_angle_R * 0.1f;
+                
+                steering_control_set_target(filter_target_L, filter_target_R);
+                
+                // 5. --- 目标标称推力幅值 ---
+                float T_L_target = sqrtf(V_L*V_L + H_thrust*H_thrust);
+                float T_R_target = sqrtf(V_R*V_R + H_thrust*H_thrust);
+                
+                // 6. --- 物理真实闭环：动态推力补偿 ---
+                // 获取当前喷嘴实际的倾斜角（偏离垂直 180 度的角）
+                float act_theta_L_deg = 180.0f - cur_steer_left; // 左边: 180为0, 90时为90
+                float act_theta_R_deg = cur_steer_right - 180.0f; // 右边: 180为0, 270时为90
+                
+                float cos_L = cosf(act_theta_L_deg * M_PI / 180.0f);
+                if (cos_L < 0.05f) cos_L = 0.05f; // 避免除零
+                float T_L_safe = V_L / cos_L;
+
+                float cos_R = cosf(act_theta_R_deg * M_PI / 180.0f);
+                if (cos_R < 0.05f) cos_R = 0.05f;
+                float T_R_safe = V_R / cos_R;
+                
+                // 最终推力取【物理延时补偿需求】和【目标矢量推力需求】的最大值，确保平衡垂直力只多不少
+                float T_L_final = fmaxf(T_L_target, T_L_safe);
+                float T_R_final = fmaxf(T_R_target, T_R_safe);
+                
+                // 下发至大电机
+                motor_control_set_pwm_vector(T_L_final, T_R_final);
             }
         } else {
-            // 屏蔽刷屏：I2C 读取失败，由于没有IMU数据，停止推力分配，重置姿态状态变量（为了避免打印乱码）
+            // I2C 读取失败保护
             state.roll_deg = 0.0f;
             state.tau_total = 0.0f;
             motor_control_emergency_stop();
         }
 
+        // 统一更新小电机位置 (下发滤波后的 PWM)
+        steering_control_update(); 
+
         // 串口实时数据监测 (每 10 帧打一条，10Hz)
         static int print_cnt = 0;
         if (++print_cnt >= 10) { 
-            printf("Target:%.1f | CurL:%.1f | CurR:%.1f | Roll:%.2f | Tau:%.2f\n", 
-                   g_steering_angle_deg, cur_steer_left, cur_steer_right, state.roll_deg, state.tau_total);
+            printf("Fwd:%.1f%% | TgtL:%.1f (Act:%.1f) | TgtR:%.1f (Act:%.1f) | Roll:%.2f\n", 
+                   g_forward_thrust, filter_target_L, cur_steer_left, filter_target_R, cur_steer_right, state.roll_deg);
             print_cnt = 0;
         }
 
-        // 绝对延时：确保本次循环精准踩在 10 毫米节点
+        // 绝对延时：确保本次循环精准踩在 10 毫秒节点
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
 }
@@ -153,13 +243,47 @@ void app_main(void)
     xTaskCreatePinnedToCore(motor_control_esc_calibrate_task, "esc_calibrate_task", 8192, NULL, 5, NULL, 1);
     // 校准模式下只运行ESC任务，永远不会到达下面的代码
     while(1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+    
+    // ************ 如果是 专用的小电机转向测试模式 ************
+#elif CURRENT_RUN_MODE == MODE_TEST_STEERING_ONLY
+    ESP_LOGW(TAG, "注意: 当前运行于独立转向机构测试模式！大电机禁用");
+    xTaskCreatePinnedToCore(steering_test_task, "steering_test_task", 4096, NULL, 5, NULL, 1);
+    
+    // 串口接收角度数据
+    char rx_buf[64] = {0};
+    int rx_len = 0;
+    while (1) {
+        int ch = getchar();
+        if (ch != EOF) {
+            if (ch == '\r' || ch == '\n') {
+                if (rx_len > 0) {
+                    rx_buf[rx_len] = '\0';
+                    char *endptr = NULL;
+                    float input_val = strtof(rx_buf, &endptr);
+                    if (endptr != rx_buf) {
+                        g_test_steer_angle = input_val;
+                        // 这里可以根据舵机的物理极限做一个约束，一般是 90～270（180朝下）
+                        if(g_test_steer_angle < 90.0f) g_test_steer_angle = 90.0f;
+                        if(g_test_steer_angle > 270.0f) g_test_steer_angle = 270.0f;
+                        printf("\n>>> 收到角度指令! 目标设为: %.1f ° <<<\n", g_test_steer_angle);
+                    } else {
+                        printf("\n>>> 无效输入: %s <<<\n", rx_buf);
+                    }
+                    rx_len = 0;
+                }
+            } else if (rx_len < sizeof(rx_buf) - 1) {
+                rx_buf[rx_len++] = (char)ch;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
 #else
-    // ============ 非校准模式：正常运行平衡控制 ============
+    // ============ 非单边测试模式：正常运行平衡融合控制 ============
     
     // 2. 将核心控制抛入后台的强心 Task (固定在 Core 1 上跑 100Hz)
     xTaskCreatePinnedToCore(control_core_task, "control_core_task", 4096, NULL, 5, NULL, 1);
 
-    // 3. 通信与监控任务 (可以使用串口直接输入绝对角度数字，或者发送 a、d 微调)
+    // 3. 通信与监控任务 (可以使用串口直接输入前进百分比，或者发送 w、s 微调)
     char rx_buf[64] = {0};
     int rx_len = 0;
     while (1) {
@@ -170,26 +294,29 @@ void app_main(void)
                     rx_buf[rx_len] = '\0';
                     
                     // 检查是否是微调快捷键
-                    if (strcmp(rx_buf, "a") == 0 || strcmp(rx_buf, "A") == 0) {
-                        g_steering_angle_deg += 15.0f;
-                        printf("\n>>> 偏角 +15，目标: %.1f 度 <<<\n", g_steering_angle_deg);
-                    } 
-                    else if (strcmp(rx_buf, "d") == 0 || strcmp(rx_buf, "D") == 0) {
-                        g_steering_angle_deg -= 15.0f;
-                        printf("\n>>> 偏角 -15，目标: %.1f 度 <<<\n", g_steering_angle_deg);
+                    if (strcmp(rx_buf, "w") == 0 || strcmp(rx_buf, "W") == 0) {
+                        g_forward_thrust += 10.0f;
+                        if(g_forward_thrust > 100.0f) g_forward_thrust = 100.0f;
+                        printf("\n>>> 前进推力 +10%%，当前目标: %.1f %% <<<\n", g_forward_thrust);
                     } 
                     else if (strcmp(rx_buf, "s") == 0 || strcmp(rx_buf, "S") == 0) {
-                        g_steering_angle_deg = 0.0f;
-                        printf("\n>>> 转向回正！ <<<\n");
+                        g_forward_thrust -= 10.0f;
+                        if(g_forward_thrust < -100.0f) g_forward_thrust = -100.0f;
+                        printf("\n>>> 前进推力 -10%%，当前目标: %.1f %% <<<\n", g_forward_thrust);
                     } 
-                    // 如果不是快捷键，尝试解析为绝对角度数字
+                    else if (strcmp(rx_buf, "space") == 0 || rx_buf[0] == ' ') {
+                        g_forward_thrust = 0.0f;
+                        printf("\n>>> 推力归零！原地自平衡！ <<<\n");
+                    } 
+                    // 解析具体数字
                     else {
                         char *endptr = NULL;
-                        float input_angle = strtof(rx_buf, &endptr);
+                        float input_val = strtof(rx_buf, &endptr);
                         if (endptr != rx_buf) { 
-                            // 成功解析到数字
-                            g_steering_angle_deg = input_angle;
-                            printf("\n>>> 收到绝对角度指令! 转向目标定为: %.1f 度 <<<\n", g_steering_angle_deg);
+                            g_forward_thrust = input_val;
+                            if(g_forward_thrust > 100.0f) g_forward_thrust = 100.0f;
+                            if(g_forward_thrust < -100.0f) g_forward_thrust = -100.0f;
+                            printf("\n>>> 收到绝对推力指令! 目标设为: %.1f %% <<<\n", g_forward_thrust);
                         } else {
                             printf("\n>>> 无效输入: %s <<<\n", rx_buf);
                         }
