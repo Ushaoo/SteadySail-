@@ -1,6 +1,7 @@
 #include "steering_control.h"
 #include "motor_control.h"
 #include "system_config.h"
+#include "control_params.h"
 #include "driver/gpio.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -156,7 +157,8 @@ void steering_control_get_encoder_status(bool *left_ok, bool *right_ok) {
 
 // 提取单边 PID 计算
 static float calculate_pid(float error, float *integral, float *prev_error, float *out_filt) {
-    const float kp = 5.0f, ki = 1.0f, kd = 0.49f, dt = 0.01f;
+    // PID 增益从全局变量读取（可通过 Blinker 实时调参）
+    const float kp = g_steer_kp, ki = g_steer_ki, kd = g_steer_kd, dt = 0.01f;
     const float deadband = 3.0f, blend = 3.0f;
     const float integral_max = 80.0f;
 

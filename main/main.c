@@ -11,11 +11,19 @@
 #include "balance_controller.h"
 #include "motor_control.h"
 #include "steering_control.h"
+#include "control_params.h"
+#include "blinker_bridge.h"
 
 static const char *TAG = "MAIN";
 
-// 键盘控制的全局目标推力（前进为正，-100 到 100）
-static float g_forward_thrust = 0.0f;
+// 键盘控制的全局目标推力（前进为正，-100 到 100）——跨文件可访问
+volatile float g_forward_thrust = 0.0f;
+
+// 供 Blinker 上报使用：由 control_core_task 每 10ms 刷新
+volatile float g_last_roll_deg = 0.0f;
+
+// 急停标志：true = 强制停止控制循环（电机停 / 舵机回正），false = 正常运行
+volatile bool g_estop_active = false;
 
 // IMU 专用测试任务 (100Hz)
 void imu_test_task(void *pvParameters) {
@@ -121,6 +129,20 @@ void control_core_task(void *pvParameters) {
     static float last_V_balance = 0.0f;
 
     while (1) {
+        // ====== 急停检查（最高优先级，遥控触发） ======
+        if (g_estop_active) {
+            // 仍然刷新 roll 显示，方便 App 端观察姿态
+            if (imu_driver_read(&imu_data) == ESP_OK) {
+                balance_controller_update(&imu_data, &state);
+                g_last_roll_deg = state.roll_deg;
+            }
+            motor_control_emergency_stop();
+            steering_control_set_target(180.0f, 180.0f);
+            steering_control_update();
+            vTaskDelayUntil(&xLastWakeTime, xFrequency);
+            continue;
+        }
+
         // 获取当前的物理真实角度
         float cur_steer_left, cur_steer_right;
         steering_control_get_current_angles(&cur_steer_left, &cur_steer_right);
@@ -133,6 +155,7 @@ void control_core_task(void *pvParameters) {
 
             // 紧急防翻车保护（超过设定的安全角度立刻停推）
             if (ENABLE_EMERGENCY_STOP && fabsf(state.roll_deg) > 60.0f) {
+                g_last_roll_deg = state.roll_deg;
                 motor_control_emergency_stop();
                 steering_control_set_target(180.0f, 180.0f); // 翻车后舵机回正向下
                 steering_control_update(); 
@@ -141,9 +164,10 @@ void control_core_task(void *pvParameters) {
                 // 1. 获取目标前进推力幅值 (映射到 0~500 范围)
                 float H_thrust = (g_forward_thrust / 100.0f) * 500.0f;
                 
-                // 2. 获取平衡所需的竖直推力幅值（绝对值）
+                // 计算平衡所需的竖直推力幅值（绝对值）
                 #define THRUST_SCALE 0.55f 
                 float V_balance_abs = fabsf(state.tau_total) * THRUST_SCALE; 
+                g_last_roll_deg = state.roll_deg;
                 
                 // 3. 判断需要的反转状态
                 // tau_total > 0: 左倾，需要左推力向下、右推力向上
@@ -265,7 +289,10 @@ void control_core_task(void *pvParameters) {
 void app_main(void)
 {
     ESP_LOGI(TAG, "SteadySail Version 2 - Dual IMU + Vector Thrust");
-    
+
+    // 0. 初始化全局可调参数（含 NVS 加载运行模式）
+    control_params_init();
+
     // 1. 初始化所有设备
     if (imu_driver_init() != ESP_OK) {
         ESP_LOGE(TAG, "IMU 硬件异常！确保连线正确！(或当前是在无传感器测试)");
@@ -273,31 +300,31 @@ void app_main(void)
     balance_controller_init();
     motor_control_init();
     steering_control_init(); // 开启外部中断读取编码器
-    
+
     // 等待编码器稳定后进行校准（竖直状态下将编码器值设为0点基准）
     vTaskDelay(pdMS_TO_TICKS(100));
     steering_control_calibrate_encoders();
-    
+
     ESP_LOGI(TAG, "SteadySail 就绪，当前模式: %d", CURRENT_RUN_MODE);
 
-    // ************ 如果是 IMU 专用测试模式 ************
+    // ************ 编译期按 CURRENT_RUN_MODE 分发任务 ************
 #if CURRENT_RUN_MODE == MODE_TEST_IMU_ONLY
     ESP_LOGI(TAG, "🎯 IMU 测试模式 - 实时显示传感器数据");
     xTaskCreatePinnedToCore(imu_test_task, "imu_test_task", 4096, NULL, 5, NULL, 1);
+    blinker_bridge_start();
     while(1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
 
-    // ************ 如果是 专用的大电机 ESC 校准模式 ************
 #elif CURRENT_RUN_MODE == MODE_CALIBRATE_ESC
     ESP_LOGW(TAG, "注意: 当前运行于大电机校准模式！");
     xTaskCreatePinnedToCore(motor_control_esc_calibrate_task, "esc_calibrate_task", 8192, NULL, 5, NULL, 1);
-    // 校准模式下只运行ESC任务，永远不会到达下面的代码
+    blinker_bridge_start();
     while(1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
-    
-    // ************ 如果是 专用的小电机转向测试模式 ************
+
 #elif CURRENT_RUN_MODE == MODE_TEST_STEERING_ONLY
     ESP_LOGW(TAG, "注意: 当前运行于独立转向机构测试模式！大电机禁用");
     xTaskCreatePinnedToCore(steering_test_task, "steering_test_task", 4096, NULL, 5, NULL, 1);
-    
+    blinker_bridge_start();
+
     // 串口接收角度数据
     char rx_buf[64] = {0};
     int rx_len = 0;
@@ -311,7 +338,6 @@ void app_main(void)
                     float input_val = strtof(rx_buf, &endptr);
                     if (endptr != rx_buf) {
                         g_test_steer_angle = input_val;
-                        // 这里可以根据舵机的物理极限做一个约束，一般是 90～270（180朝下）
                         if(g_test_steer_angle < 90.0f) g_test_steer_angle = 90.0f;
                         if(g_test_steer_angle > 270.0f) g_test_steer_angle = 270.0f;
                         printf("\n>>> 收到角度指令! 目标设为: %.1f ° <<<\n", g_test_steer_angle);
@@ -326,57 +352,57 @@ void app_main(void)
         }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
-#else
-    // ============ 非单边测试模式：正常运行平衡融合控制 ============
-    
-    // 2. 将核心控制抛入后台的强心 Task (固定在 Core 1 上跑 100Hz)
-    xTaskCreatePinnedToCore(control_core_task, "control_core_task", 4096, NULL, 5, NULL, 1);
 
-    // 3. 通信与监控任务 (可以使用串口直接输入前进百分比，或者发送 w、s 微调)
+#else
+    // ============ 其他模式（含 FULL_INTEGRATION / TEST_SENSORS / TEST_BALANCE_ONLY）：运行平衡融合控制 ============
+    xTaskCreatePinnedToCore(control_core_task, "control_core_task", 4096, NULL, 5, NULL, 1);
+    blinker_bridge_start();
+
+    // 通信与监控任务 (串口输入前进推力)
     char rx_buf[64] = {0};
     int rx_len = 0;
     while (1) {
         int ch = getchar();
         if (ch != EOF) {
-            if (ch == '\r' || ch == '\n') {
-                if (rx_len > 0) {
-                    rx_buf[rx_len] = '\0';
-                    
-                    // 检查是否是微调快捷键
-                    if (strcmp(rx_buf, "w") == 0 || strcmp(rx_buf, "W") == 0) {
-                        g_forward_thrust += 10.0f;
+        if (ch == '\r' || ch == '\n') {
+            if (rx_len > 0) {
+                rx_buf[rx_len] = '\0';
+                
+                // 检查是否是微调快捷键
+                if (strcmp(rx_buf, "w") == 0 || strcmp(rx_buf, "W") == 0) {
+                    g_forward_thrust += 10.0f;
+                    if(g_forward_thrust > 100.0f) g_forward_thrust = 100.0f;
+                    printf("\n>>> 前进推力 +10%%，当前目标: %.1f %% <<<\n", g_forward_thrust);
+                } 
+                else if (strcmp(rx_buf, "s") == 0 || strcmp(rx_buf, "S") == 0) {
+                    g_forward_thrust -= 10.0f;
+                    if(g_forward_thrust < -100.0f) g_forward_thrust = -100.0f;
+                    printf("\n>>> 前进推力 -10%%，当前目标: %.1f %% <<<\n", g_forward_thrust);
+                } 
+                else if (strcmp(rx_buf, "space") == 0 || rx_buf[0] == ' ') {
+                    g_forward_thrust = 0.0f;
+                    printf("\n>>> 推力归零！原地自平衡！ <<<\n");
+                } 
+                // 解析具体数字
+                else {
+                    char *endptr = NULL;
+                    float input_val = strtof(rx_buf, &endptr);
+                    if (endptr != rx_buf) { 
+                        g_forward_thrust = input_val;
                         if(g_forward_thrust > 100.0f) g_forward_thrust = 100.0f;
-                        printf("\n>>> 前进推力 +10%%，当前目标: %.1f %% <<<\n", g_forward_thrust);
-                    } 
-                    else if (strcmp(rx_buf, "s") == 0 || strcmp(rx_buf, "S") == 0) {
-                        g_forward_thrust -= 10.0f;
                         if(g_forward_thrust < -100.0f) g_forward_thrust = -100.0f;
-                        printf("\n>>> 前进推力 -10%%，当前目标: %.1f %% <<<\n", g_forward_thrust);
-                    } 
-                    else if (strcmp(rx_buf, "space") == 0 || rx_buf[0] == ' ') {
-                        g_forward_thrust = 0.0f;
-                        printf("\n>>> 推力归零！原地自平衡！ <<<\n");
-                    } 
-                    // 解析具体数字
-                    else {
-                        char *endptr = NULL;
-                        float input_val = strtof(rx_buf, &endptr);
-                        if (endptr != rx_buf) { 
-                            g_forward_thrust = input_val;
-                            if(g_forward_thrust > 100.0f) g_forward_thrust = 100.0f;
-                            if(g_forward_thrust < -100.0f) g_forward_thrust = -100.0f;
-                            printf("\n>>> 收到绝对推力指令! 目标设为: %.1f %% <<<\n", g_forward_thrust);
-                        } else {
-                            printf("\n>>> 无效输入: %s <<<\n", rx_buf);
-                        }
+                        printf("\n>>> 收到绝对推力指令! 目标设为: %.1f %% <<<\n", g_forward_thrust);
+                    } else {
+                        printf("\n>>> 无效输入: %s <<<\n", rx_buf);
                     }
-                    rx_len = 0;
                 }
-            } else if (rx_len < sizeof(rx_buf) - 1) {
-                rx_buf[rx_len++] = (char)ch;
+                rx_len = 0;
             }
+        } else if (rx_len < sizeof(rx_buf) - 1) {
+            rx_buf[rx_len++] = (char)ch;
         }
-        vTaskDelay(pdMS_TO_TICKS(10)); // 提高串口响应速度
+    }
+    vTaskDelay(pdMS_TO_TICKS(10)); // 提高串口响应速度
     }
 #endif
 }

@@ -36,6 +36,7 @@ D:/SteadySail--1/build/esp-idf/newlib/libnewlib.a
 D:/SteadySail--1/build/esp-idf/cxx/libcxx.a
 D:/SteadySail--1/build/esp-idf/app_trace/libapp_trace.a
 D:/SteadySail--1/build/esp-idf/asio/libasio.a
+D:/SteadySail--1/build/esp-idf/bt/libbt.a
 D:/SteadySail--1/build/esp-idf/cbor/libcbor.a
 D:/SteadySail--1/build/esp-idf/unity/libunity.a
 D:/SteadySail--1/build/esp-idf/cmock/libcmock.a
@@ -70,5 +71,5 @@ D:/SteadySail--1/build/esp-idf/spiffs/libspiffs.a
 D:/SteadySail--1/build/esp-idf/usb/libusb.a
 D:/SteadySail--1/build/esp-idf/ulp/libulp.a
 D:/SteadySail--1/build/esp-idf/wifi_provisioning/libwifi_provisioning.a
-D:/SteadySail--1/build/esp-idf/main/libmain.a
 D:/SteadySail--1/build/esp-idf/Blinker/libBlinker.a
+D:/SteadySail--1/build/esp-idf/main/libmain.a

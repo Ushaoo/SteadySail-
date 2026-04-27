@@ -423,6 +423,7 @@ D:/SteadySail--1/build/esp-idf/asio/CMakeFiles/list_install_components.dir
 D:/SteadySail--1/build/esp-idf/asio/CMakeFiles/install.dir
 D:/SteadySail--1/build/esp-idf/asio/CMakeFiles/install/local.dir
 D:/SteadySail--1/build/esp-idf/asio/CMakeFiles/install/strip.dir
+D:/SteadySail--1/build/esp-idf/bt/CMakeFiles/__idf_bt.dir
 D:/SteadySail--1/build/esp-idf/bt/CMakeFiles/edit_cache.dir
 D:/SteadySail--1/build/esp-idf/bt/CMakeFiles/rebuild_cache.dir
 D:/SteadySail--1/build/esp-idf/bt/CMakeFiles/list_install_components.dir
@@ -685,13 +686,6 @@ D:/SteadySail--1/build/esp-idf/wifi_provisioning/CMakeFiles/list_install_compone
 D:/SteadySail--1/build/esp-idf/wifi_provisioning/CMakeFiles/install.dir
 D:/SteadySail--1/build/esp-idf/wifi_provisioning/CMakeFiles/install/local.dir
 D:/SteadySail--1/build/esp-idf/wifi_provisioning/CMakeFiles/install/strip.dir
-D:/SteadySail--1/build/esp-idf/main/CMakeFiles/__idf_main.dir
-D:/SteadySail--1/build/esp-idf/main/CMakeFiles/edit_cache.dir
-D:/SteadySail--1/build/esp-idf/main/CMakeFiles/rebuild_cache.dir
-D:/SteadySail--1/build/esp-idf/main/CMakeFiles/list_install_components.dir
-D:/SteadySail--1/build/esp-idf/main/CMakeFiles/install.dir
-D:/SteadySail--1/build/esp-idf/main/CMakeFiles/install/local.dir
-D:/SteadySail--1/build/esp-idf/main/CMakeFiles/install/strip.dir
 D:/SteadySail--1/build/esp-idf/Blinker/CMakeFiles/__idf_Blinker.dir
 D:/SteadySail--1/build/esp-idf/Blinker/CMakeFiles/edit_cache.dir
 D:/SteadySail--1/build/esp-idf/Blinker/CMakeFiles/rebuild_cache.dir
@@ -699,3 +693,10 @@ D:/SteadySail--1/build/esp-idf/Blinker/CMakeFiles/list_install_components.dir
 D:/SteadySail--1/build/esp-idf/Blinker/CMakeFiles/install.dir
 D:/SteadySail--1/build/esp-idf/Blinker/CMakeFiles/install/local.dir
 D:/SteadySail--1/build/esp-idf/Blinker/CMakeFiles/install/strip.dir
+D:/SteadySail--1/build/esp-idf/main/CMakeFiles/__idf_main.dir
+D:/SteadySail--1/build/esp-idf/main/CMakeFiles/edit_cache.dir
+D:/SteadySail--1/build/esp-idf/main/CMakeFiles/rebuild_cache.dir
+D:/SteadySail--1/build/esp-idf/main/CMakeFiles/list_install_components.dir
+D:/SteadySail--1/build/esp-idf/main/CMakeFiles/install.dir
+D:/SteadySail--1/build/esp-idf/main/CMakeFiles/install/local.dir
+D:/SteadySail--1/build/esp-idf/main/CMakeFiles/install/strip.dir

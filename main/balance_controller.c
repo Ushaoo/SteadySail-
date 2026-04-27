@@ -1,5 +1,6 @@
 #include "balance_controller.h"
 #include "system_config.h"
+#include "control_params.h"
 #include <math.h>
 
 // --- 双 IMU Mahony 算法全局变量 ---
@@ -216,9 +217,9 @@ void balance_controller_update(dual_imu_data_t *imu_data, balance_state_t *state
     if (pid_integral > 100.0f) pid_integral = 100.0f;
     if (pid_integral < -100.0f) pid_integral = -100.0f;
 
-    float prop = PID_KP * (0.8f * 0.0f - theta); // 2DOF: b=0.8
-    float integ = PID_KI * pid_integral;
-    float deriv = PID_KD * (0.0f - omega);       // 2DOF: c=0.0
+    float prop = g_balance_kp * (0.8f * 0.0f - theta); // 2DOF: b=0.8
+    float integ = g_balance_ki * pid_integral;
+    float deriv = g_balance_kd * (0.0f - omega);       // 2DOF: c=0.0
     state->tau_pid = prop + integ + deriv;
 
     // [总力矩与系统级死区平滑衰减]
