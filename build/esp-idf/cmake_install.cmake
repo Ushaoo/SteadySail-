@@ -122,6 +122,7 @@ if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   include("D:/SteadySail--1/build/esp-idf/ulp/cmake_install.cmake")
   include("D:/SteadySail--1/build/esp-idf/wifi_provisioning/cmake_install.cmake")
   include("D:/SteadySail--1/build/esp-idf/main/cmake_install.cmake")
+  include("D:/SteadySail--1/build/esp-idf/Blinker/cmake_install.cmake")
 
 endif()
 

@@ -2130,6 +2130,710 @@
             {
                 "children": [
                     {
+                        "children": [
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_DEVICE>",
+                                "help": null,
+                                "id": "BLINKER_CUSTOM_ESP",
+                                "name": "BLINKER_CUSTOM_ESP",
+                                "range": null,
+                                "title": "BLINKER_CUSTOM_ESP",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_DEVICE>",
+                                "help": null,
+                                "id": "BLINKER_PRO_ESP",
+                                "name": "BLINKER_PRO_ESP",
+                                "range": null,
+                                "title": "BLINKER_PRO_ESP",
+                                "type": "bool"
+                            }
+                        ],
+                        "depends_on": null,
+                        "help": "Blinker Device Type.",
+                        "id": "blinker-config-blinker-device-config-blinker-device-type",
+                        "name": "BLINKER_DEVICE",
+                        "title": "Blinker Device Type",
+                        "type": "choice"
+                    },
+                    {
+                        "children": [],
+                        "depends_on": "BLINKER_PRO_ESP",
+                        "help": "Blinker Typekey for Blinker Server to identify device.",
+                        "id": "BLINKER_TYPE_KEY",
+                        "name": "BLINKER_TYPE_KEY",
+                        "range": null,
+                        "title": "Type Key",
+                        "type": "string"
+                    },
+                    {
+                        "children": [],
+                        "depends_on": null,
+                        "help": "Blinker Authkey for Blinker Server to identify device.",
+                        "id": "BLINKER_AUTH_KEY",
+                        "name": "BLINKER_AUTH_KEY",
+                        "range": null,
+                        "title": "Auth Key",
+                        "type": "string"
+                    },
+                    {
+                        "children": [
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_ALIGENIE>",
+                                "help": null,
+                                "id": "BLINKER_ALIGENIE_NONE",
+                                "name": "BLINKER_ALIGENIE_NONE",
+                                "range": null,
+                                "title": "ALIGENIE_NONE",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_ALIGENIE>",
+                                "help": null,
+                                "id": "BLINKER_ALIGENIE_LIGHT",
+                                "name": "BLINKER_ALIGENIE_LIGHT",
+                                "range": null,
+                                "title": "ALIGENIE_LIGHT",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_ALIGENIE>",
+                                "help": null,
+                                "id": "BLINKER_ALIGENIE_FAN",
+                                "name": "BLINKER_ALIGENIE_FAN",
+                                "range": null,
+                                "title": "ALIGENIE_FAN",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_ALIGENIE>",
+                                "help": null,
+                                "id": "BLINKER_ALIGENIE_OUTLET",
+                                "name": "BLINKER_ALIGENIE_OUTLET",
+                                "range": null,
+                                "title": "ALIGENIE_OUTLET",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_ALIGENIE>",
+                                "help": null,
+                                "id": "BLINKER_ALIGENIE_SENSOR",
+                                "name": "BLINKER_ALIGENIE_SENSOR",
+                                "range": null,
+                                "title": "ALIGENIE_SENSOR",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_ALIGENIE>",
+                                "help": null,
+                                "id": "BLINKER_ALIGENIE_MULTI_OUTLET",
+                                "name": "BLINKER_ALIGENIE_MULTI_OUTLET",
+                                "range": null,
+                                "title": "ALIGENIE_MULTI_OUTLET",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_ALIGENIE>",
+                                "help": null,
+                                "id": "BLINKER_ALIGENIE_AIR_CONDITION",
+                                "name": "BLINKER_ALIGENIE_AIR_CONDITION",
+                                "range": null,
+                                "title": "ALIGENIE_AIR_CONDITION",
+                                "type": "bool"
+                            }
+                        ],
+                        "depends_on": null,
+                        "help": "ALIGENIE assistant support device type you want to use.",
+                        "id": "blinker-config-blinker-device-config-blinker-aligenie-device-type",
+                        "name": "BLINKER_ALIGENIE",
+                        "title": "Blinker ALIGENIE Device Type",
+                        "type": "choice"
+                    },
+                    {
+                        "children": [],
+                        "depends_on": null,
+                        "help": null,
+                        "id": "BLINKER_ALIGENIE_TYPE",
+                        "name": "BLINKER_ALIGENIE_TYPE",
+                        "range": null,
+                        "title": null,
+                        "type": "string"
+                    },
+                    {
+                        "children": [
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_DUEROS>",
+                                "help": null,
+                                "id": "BLINKER_DUEROS_NONE",
+                                "name": "BLINKER_DUEROS_NONE",
+                                "range": null,
+                                "title": "DUEROS_NONE",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_DUEROS>",
+                                "help": null,
+                                "id": "BLINKER_DUEROS_LIGHT",
+                                "name": "BLINKER_DUEROS_LIGHT",
+                                "range": null,
+                                "title": "DUEROS_LIGHT",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_DUEROS>",
+                                "help": null,
+                                "id": "BLINKER_DUEROS_FAN",
+                                "name": "BLINKER_DUEROS_FAN",
+                                "range": null,
+                                "title": "DUEROS_FAN",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_DUEROS>",
+                                "help": null,
+                                "id": "BLINKER_DUEROS_OUTLET",
+                                "name": "BLINKER_DUEROS_OUTLET",
+                                "range": null,
+                                "title": "DUEROS_OUTLET",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_DUEROS>",
+                                "help": null,
+                                "id": "BLINKER_DUEROS_SENSOR",
+                                "name": "BLINKER_DUEROS_SENSOR",
+                                "range": null,
+                                "title": "DUEROS_SENSOR",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_DUEROS>",
+                                "help": null,
+                                "id": "BLINKER_DUEROS_MULTI_OUTLET",
+                                "name": "BLINKER_DUEROS_MULTI_OUTLET",
+                                "range": null,
+                                "title": "DUEROS_MULTI_OUTLET",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_DUEROS>",
+                                "help": null,
+                                "id": "BLINKER_DUEROS_AIR_CONDITION",
+                                "name": "BLINKER_DUEROS_AIR_CONDITION",
+                                "range": null,
+                                "title": "DUEROS_AIR_CONDITION",
+                                "type": "bool"
+                            }
+                        ],
+                        "depends_on": null,
+                        "help": "DUEROS assistant support device type you want to use.",
+                        "id": "blinker-config-blinker-device-config-blinker-dueros-device-type",
+                        "name": "BLINKER_DUEROS",
+                        "title": "Blinker DUEROS Device Type",
+                        "type": "choice"
+                    },
+                    {
+                        "children": [],
+                        "depends_on": null,
+                        "help": null,
+                        "id": "BLINKER_DUEROS_TYPE",
+                        "name": "BLINKER_DUEROS_TYPE",
+                        "range": null,
+                        "title": null,
+                        "type": "string"
+                    },
+                    {
+                        "children": [
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_MIOT>",
+                                "help": null,
+                                "id": "BLINKER_MIOT_NONE",
+                                "name": "BLINKER_MIOT_NONE",
+                                "range": null,
+                                "title": "MIOT_NONE",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_MIOT>",
+                                "help": null,
+                                "id": "BLINKER_MIOT_LIGHT",
+                                "name": "BLINKER_MIOT_LIGHT",
+                                "range": null,
+                                "title": "MIOT_LIGHT",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_MIOT>",
+                                "help": null,
+                                "id": "BLINKER_MIOT_FAN",
+                                "name": "BLINKER_MIOT_FAN",
+                                "range": null,
+                                "title": "MIOT_FAN",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_MIOT>",
+                                "help": null,
+                                "id": "BLINKER_MIOT_OUTLET",
+                                "name": "BLINKER_MIOT_OUTLET",
+                                "range": null,
+                                "title": "MIOT_OUTLET",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_MIOT>",
+                                "help": null,
+                                "id": "BLINKER_MIOT_SENSOR",
+                                "name": "BLINKER_MIOT_SENSOR",
+                                "range": null,
+                                "title": "MIOT_SENSOR",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_MIOT>",
+                                "help": null,
+                                "id": "BLINKER_MIOT_MULTI_OUTLET",
+                                "name": "BLINKER_MIOT_MULTI_OUTLET",
+                                "range": null,
+                                "title": "MIOT_MULTI_OUTLET",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_MIOT>",
+                                "help": null,
+                                "id": "BLINKER_MIOT_AIR_CONDITION",
+                                "name": "BLINKER_MIOT_AIR_CONDITION",
+                                "range": null,
+                                "title": "MIOT_AIR_CONDITION",
+                                "type": "bool"
+                            }
+                        ],
+                        "depends_on": null,
+                        "help": "MIOT assistant support device type you want to use.",
+                        "id": "blinker-config-blinker-device-config-blinker-miot-device-type",
+                        "name": "BLINKER_MIOT",
+                        "title": "Blinker MIOT Device Type",
+                        "type": "choice"
+                    },
+                    {
+                        "children": [],
+                        "depends_on": null,
+                        "help": null,
+                        "id": "BLINKER_MIOT_TYPE",
+                        "name": "BLINKER_MIOT_TYPE",
+                        "range": null,
+                        "title": null,
+                        "type": "string"
+                    }
+                ],
+                "depends_on": null,
+                "id": "blinker-config-blinker-device-config",
+                "title": "Blinker Device Config",
+                "type": "menu"
+            },
+            {
+                "children": [
+                    {
+                        "children": [
+                            {
+                                "children": [],
+                                "depends_on": "BLINKER_CUSTOM_ESP && <choice BLINKER_PROV_TYPE>",
+                                "help": null,
+                                "id": "BLINKER_DEFAULT_CONFIG",
+                                "name": "BLINKER_DEFAULT_CONFIG",
+                                "range": null,
+                                "title": "DefaultConfig",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_PROV_TYPE>",
+                                "help": null,
+                                "id": "BLINKER_SMART_CONFIG",
+                                "name": "BLINKER_SMART_CONFIG",
+                                "range": null,
+                                "title": "SmartConfig",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_PROV_TYPE>",
+                                "help": null,
+                                "id": "BLINKER_AP_CONFIG",
+                                "name": "BLINKER_AP_CONFIG",
+                                "range": null,
+                                "title": "ApConfig",
+                                "type": "bool"
+                            }
+                        ],
+                        "depends_on": null,
+                        "help": "Set WiFi config type.",
+                        "id": "blinker-config-blinker-provisioning-config-wifi-config-type",
+                        "name": "BLINKER_PROV_TYPE",
+                        "title": "WiFi Config Type",
+                        "type": "choice"
+                    },
+                    {
+                        "children": [
+                            {
+                                "children": [],
+                                "depends_on": "BLINKER_CUSTOM_ESP && BLINKER_DEFAULT_CONFIG",
+                                "help": "The WLAN SSID which your device connect.",
+                                "id": "BLINKER_WIFI_SSID",
+                                "name": "BLINKER_WIFI_SSID",
+                                "range": null,
+                                "title": "WiFi SSID",
+                                "type": "string"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "BLINKER_CUSTOM_ESP && BLINKER_DEFAULT_CONFIG",
+                                "help": "The WLAN Password which your device connect.",
+                                "id": "BLINKER_WIFI_PASSWORD",
+                                "name": "BLINKER_WIFI_PASSWORD",
+                                "range": null,
+                                "title": "WiFi Password",
+                                "type": "string"
+                            }
+                        ],
+                        "depends_on": "BLINKER_CUSTOM_ESP && BLINKER_DEFAULT_CONFIG",
+                        "id": "blinker-config-blinker-provisioning-config-blinker-default-config",
+                        "title": "Blinker Default Config",
+                        "type": "menu"
+                    },
+                    {
+                        "children": [
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_PROV_SMARTCONFIG_TYPE>",
+                                "help": null,
+                                "id": "ESP_TOUCH",
+                                "name": "ESP_TOUCH",
+                                "range": null,
+                                "title": "ESPTouch",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_PROV_SMARTCONFIG_TYPE>",
+                                "help": null,
+                                "id": "AIRKISS",
+                                "name": "AIRKISS",
+                                "range": null,
+                                "title": "AirKiss",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_PROV_SMARTCONFIG_TYPE>",
+                                "help": null,
+                                "id": "ESP_TOUCH-AIRKISS",
+                                "name": "ESP_TOUCH-AIRKISS",
+                                "range": null,
+                                "title": "ESPTouch and AirKiss",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_PROV_SMARTCONFIG_TYPE>",
+                                "help": null,
+                                "id": "ESP_TOUCH_V2",
+                                "name": "ESP_TOUCH_V2",
+                                "range": null,
+                                "title": "ESPTouch-V2",
+                                "type": "bool"
+                            }
+                        ],
+                        "depends_on": "BLINKER_SMART_CONFIG",
+                        "help": "Set protocol type of SmartConfig.\n\nStart SmartConfig method according to the selected type when user select \"ESPTouch\", \"AirKiss\",  \"ESPTouch and AirKiss\" or \"ESPTouch V2\" type.",
+                        "id": "blinker-config-blinker-provisioning-config-smartconfig-type",
+                        "name": "BLINKER_PROV_SMARTCONFIG_TYPE",
+                        "title": "Smartconfig Type",
+                        "type": "choice"
+                    },
+                    {
+                        "children": [],
+                        "depends_on": null,
+                        "help": null,
+                        "id": "BLINKER_PROV_SMARTCONFIG_TYPE",
+                        "name": "BLINKER_PROV_SMARTCONFIG_TYPE",
+                        "range": null,
+                        "title": null,
+                        "type": "int"
+                    }
+                ],
+                "depends_on": null,
+                "id": "blinker-config-blinker-provisioning-config",
+                "title": "Blinker Provisioning Config",
+                "type": "menu"
+            },
+            {
+                "children": [
+                    {
+                        "children": [],
+                        "depends_on": null,
+                        "help": "Blinker Server Host.",
+                        "id": "BLINKER_SERVER_HOST",
+                        "name": "BLINKER_SERVER_HOST",
+                        "range": null,
+                        "title": "Blinker Server Host",
+                        "type": "string"
+                    },
+                    {
+                        "children": [],
+                        "depends_on": null,
+                        "help": "Namespace where data is stored in NVS.",
+                        "id": "BLINKER_NVS_NAMESPACE",
+                        "name": "BLINKER_NVS_NAMESPACE",
+                        "range": null,
+                        "title": "Namespace where data is stored in NVS",
+                        "type": "string"
+                    },
+                    {
+                        "children": [],
+                        "depends_on": null,
+                        "help": "Buffer size to store the http response.",
+                        "id": "BLINKER_HTTP_BUFFER_SIZE",
+                        "name": "BLINKER_HTTP_BUFFER_SIZE",
+                        "range": [
+                            512,
+                            2048
+                        ],
+                        "title": "Buffer size to store the http response",
+                        "type": "int"
+                    },
+                    {
+                        "children": [],
+                        "depends_on": null,
+                        "help": "Http heart beat interval(min).",
+                        "id": "BLINKER_HTTP_HEART_BEAT_TIME_INTERVAL",
+                        "name": "BLINKER_HTTP_HEART_BEAT_TIME_INTERVAL",
+                        "range": [
+                            5,
+                            30
+                        ],
+                        "title": "Http heart beat interval(min)",
+                        "type": "int"
+                    },
+                    {
+                        "children": [
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_RESET_TYPE>",
+                                "help": null,
+                                "id": "REBOOT_RESET_TYPE",
+                                "name": "REBOOT_RESET_TYPE",
+                                "range": null,
+                                "title": "REBOOT_RESET",
+                                "type": "bool"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": "<choice BLINKER_RESET_TYPE>",
+                                "help": null,
+                                "id": "BUTTON_RESET_TYPE",
+                                "name": "BUTTON_RESET_TYPE",
+                                "range": null,
+                                "title": "BUTTON_RESET",
+                                "type": "bool"
+                            }
+                        ],
+                        "depends_on": null,
+                        "help": "The type use to reset device",
+                        "id": "blinker-config-blinker-utils-the-type-use-to-reset-device",
+                        "name": "BLINKER_RESET_TYPE",
+                        "title": "The type use to reset device",
+                        "type": "choice"
+                    },
+                    {
+                        "children": [
+                            {
+                                "children": [],
+                                "depends_on": null,
+                                "help": null,
+                                "id": "BUTTON_RESET_INTERVAL_TIME",
+                                "name": "BUTTON_RESET_INTERVAL_TIME",
+                                "range": [
+                                    2,
+                                    10
+                                ],
+                                "title": "Button press interval(s) time to reset device",
+                                "type": "int"
+                            },
+                            {
+                                "children": [
+                                    {
+                                        "children": [],
+                                        "depends_on": "<choice TIMER_IMPLEMENT>",
+                                        "help": null,
+                                        "id": "BUTTON_USE_RTOS_TIMER",
+                                        "name": "BUTTON_USE_RTOS_TIMER",
+                                        "range": null,
+                                        "title": "Use FreeRTOS Timer",
+                                        "type": "bool"
+                                    },
+                                    {
+                                        "children": [],
+                                        "depends_on": "<choice TIMER_IMPLEMENT>",
+                                        "help": null,
+                                        "id": "BUTTON_USE_ESP_TIMER",
+                                        "name": "BUTTON_USE_ESP_TIMER",
+                                        "range": null,
+                                        "title": "Use ESP Timer",
+                                        "type": "bool"
+                                    }
+                                ],
+                                "depends_on": null,
+                                "help": "Choose a implementation of timer for button instance.",
+                                "id": "blinker-config-blinker-utils-blinker-button-reset-config-button-timer-mode",
+                                "name": "TIMER_IMPLEMENT",
+                                "title": "Button Timer Mode",
+                                "type": "choice"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": null,
+                                "help": null,
+                                "id": "IO_GLITCH_FILTER_TIME_MS",
+                                "name": "IO_GLITCH_FILTER_TIME_MS",
+                                "range": [
+                                    10,
+                                    100
+                                ],
+                                "title": "IO glitch filter timer ms (10~100)",
+                                "type": "int"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": null,
+                                "help": null,
+                                "id": "BUTTON_IO_NUM",
+                                "name": "BUTTON_IO_NUM",
+                                "range": null,
+                                "title": "Button io number set",
+                                "type": "int"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": null,
+                                "help": null,
+                                "id": "BUTTON_ACTIVE_LEVEL",
+                                "name": "BUTTON_ACTIVE_LEVEL",
+                                "range": null,
+                                "title": "Button cative level, high or low",
+                                "type": "int"
+                            }
+                        ],
+                        "depends_on": null,
+                        "id": "blinker-config-blinker-utils-blinker-button-reset-config",
+                        "title": "Blinker Button Reset Config",
+                        "type": "menu"
+                    },
+                    {
+                        "children": [
+                            {
+                                "children": [],
+                                "depends_on": null,
+                                "help": "Continuous reboot interval.",
+                                "id": "BLINKER_REBOOT_UNBROKEN_INTERVAL_TIMEOUT",
+                                "name": "BLINKER_REBOOT_UNBROKEN_INTERVAL_TIMEOUT",
+                                "range": [
+                                    3000,
+                                    10000
+                                ],
+                                "title": "Continuous reboot interval(ms)",
+                                "type": "int"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": null,
+                                "help": "Continuous restart triggers device reset.",
+                                "id": "BLINKER_REBOOT_UNBROKEN_FALLBACK_COUNT_RESET",
+                                "name": "BLINKER_REBOOT_UNBROKEN_FALLBACK_COUNT_RESET",
+                                "range": [
+                                    3,
+                                    10
+                                ],
+                                "title": "Continuous restart triggers device reset",
+                                "type": "int"
+                            },
+                            {
+                                "children": [],
+                                "depends_on": null,
+                                "help": "Continuous restart triggers version rollback.",
+                                "id": "BLINKER_REBOOT_UNBROKEN_FALLBACK_COUNT",
+                                "name": "BLINKER_REBOOT_UNBROKEN_FALLBACK_COUNT",
+                                "range": null,
+                                "title": "Continuous restart triggers version rollback",
+                                "type": "int"
+                            }
+                        ],
+                        "depends_on": null,
+                        "id": "blinker-config-blinker-utils-blinker-reboot-reset-config",
+                        "title": "Blinker Reboot Reset Config",
+                        "type": "menu"
+                    },
+                    {
+                        "children": [],
+                        "depends_on": null,
+                        "help": "Device firmware version",
+                        "id": "BLINKER_FIRMWARE_VERSION",
+                        "name": "BLINKER_FIRMWARE_VERSION",
+                        "range": null,
+                        "title": "Device firmware version",
+                        "type": "string"
+                    },
+                    {
+                        "children": [],
+                        "depends_on": null,
+                        "help": "Blinker main protocol mqtt use ssl.",
+                        "id": "BLINKER_WITH_SSL",
+                        "name": "BLINKER_WITH_SSL",
+                        "range": null,
+                        "title": "blinker with ssl",
+                        "type": "bool"
+                    }
+                ],
+                "depends_on": null,
+                "id": "blinker-config-blinker-utils",
+                "title": "Blinker Utils",
+                "type": "menu"
+            }
+        ],
+        "depends_on": null,
+        "id": "blinker-config",
+        "title": "Blinker Config",
+        "type": "menu"
+    },
+    {
+        "children": [
+            {
+                "children": [
+                    {
                         "children": [],
                         "depends_on": "<choice COMPILER_OPTIMIZATION>",
                         "help": null,
