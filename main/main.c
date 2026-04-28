@@ -81,6 +81,9 @@ void imu_test_task(void *pvParameters) {
 // 测试专用目标角度
 static float g_test_steer_angle = 180.0f;
 
+// 演示模式：手动模拟 Roll 角（度）。仅在 MODE_FULL_INTEGRATION + DEMO_MANUAL_ROLL 下使用。
+volatile float g_demo_roll_deg = 0.0f;
+
 // 转向机构只转测试任务 (100Hz)
 void steering_test_task(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
@@ -100,10 +103,16 @@ void steering_test_task(void *pvParameters) {
         // 打印当前闭环数据
         float act_L, act_R;
         steering_control_get_current_angles(&act_L, &act_R);
-        
+
+        // 读取最近一次下发的舵机 PWM (1000~2000 us)
+        uint32_t pwm_L = 1500, pwm_R = 1500;
+        motor_control_get_last_steer_pwm(&pwm_L, &pwm_R);
+
         static int print_cnt = 0;
-        if (++print_cnt >= 20) { // 5Hz
-            printf("[转向测试] Target: %.1f° | 实际L: %.1f°, 实际R: %.1f°\n", g_test_steer_angle, act_L, act_R);
+        if (++print_cnt >= 5) { // 20Hz
+            ESP_LOGI(TAG, "[转向测试] Target: %.1f° | 实际L: %.1f°, 实际R: %.1f° | PWM_L: %lu us, PWM_R: %lu us",
+                   g_test_steer_angle, act_L, act_R,
+                   (unsigned long)pwm_L, (unsigned long)pwm_R);
             print_cnt = 0;
         }
 
@@ -148,10 +157,57 @@ void control_core_task(void *pvParameters) {
         steering_control_get_current_angles(&cur_steer_left, &cur_steer_right);
 
         // --- 姿态平衡环与推力矢量解算 ---
+        bool imu_ok = false;
+
+#if (CURRENT_RUN_MODE == MODE_FULL_INTEGRATION) && DEMO_MANUAL_ROLL
+        // ====== 演示模式：手动模拟 Roll，忽略 IMU ======
+        // 直接用静态平衡近似公式合成 tau_total（omega=0, alpha=0, integral=0）：
+        //   tau_disturb = m*g*(W/2)*sin(theta)
+        //   tau_ff      = -tau_disturb + K_SELF*theta        (来自 balance_controller 内 tau_self = -K_SELF*theta)
+        //   tau_pid     = g_balance_kp * (-theta)            (P 项；I/D 在静态下为 0)
+        //   tau_total   = FEEDFORWARD_PARAM*tau_ff - FEEDBACK_PARAM*tau_pid
+        // 之后再施加与 balance_controller 一致的角度死区平滑。
+        {
+            float theta = g_demo_roll_deg;
+            float K_SELF_DEMO = 100.0f;  // 与 balance_controller.c 中 K_SELF 一致
+            float tau_disturb = SYS_MASS * GRAVITY * (SYS_WIDTH / 2.0f)
+                                * sinf(theta * (float)M_PI / 180.0f);
+            float tau_ff  = -tau_disturb + K_SELF_DEMO * theta;
+            float tau_pid =  g_balance_kp * (-theta);
+            float tau_total = FEEDFORWARD_PARAM * tau_ff - FEEDBACK_PARAM * tau_pid;
+
+            // 角度死区（与 balance_controller 同步）
+            float abs_theta = fabsf(theta);
+            float angle_factor;
+            if (abs_theta < ANGLE_DEADZONE) {
+                angle_factor = 0.0f;
+            } else if (abs_theta < ANGLE_DEADZONE_SOFT) {
+                float t = (abs_theta - ANGLE_DEADZONE) / (ANGLE_DEADZONE_SOFT - ANGLE_DEADZONE);
+                angle_factor = t * t * (3.0f - 2.0f * t);
+            } else {
+                angle_factor = 1.0f;
+            }
+            tau_total *= angle_factor;
+
+            state.roll_deg     = theta;
+            state.pitch_deg    = 0.0f;
+            state.yaw_deg      = 0.0f;
+            state.omega_filtered = 0.0f;
+            state.alpha        = 0.0f;
+            state.tau_ff       = tau_ff;
+            state.tau_pid      = tau_pid;
+            state.tau_total    = tau_total;
+            imu_ok = true;
+        }
+#else
         if (imu_driver_read(&imu_data) == ESP_OK) {
-            
             // 算出需要抵抗倾覆的垂直力矩 tau_total
             balance_controller_update(&imu_data, &state);
+            imu_ok = true;
+        }
+#endif
+
+        if (imu_ok) {
 
             // 紧急防翻车保护（超过设定的安全角度立刻停推）
             if (ENABLE_EMERGENCY_STOP && fabsf(state.roll_deg) > 60.0f) {
@@ -383,6 +439,24 @@ void app_main(void)
                     g_forward_thrust = 0.0f;
                     printf("\n>>> 推力归零！原地自平衡！ <<<\n");
                 } 
+                // 演示模式：r <角度>  设置模拟 Roll
+                else if ((rx_buf[0] == 'r' || rx_buf[0] == 'R') &&
+                         (rx_buf[1] == ' ' || rx_buf[1] == '=' || rx_buf[1] == ':')) {
+#if (CURRENT_RUN_MODE == MODE_FULL_INTEGRATION) && DEMO_MANUAL_ROLL
+                    char *endptr = NULL;
+                    float roll_val = strtof(rx_buf + 2, &endptr);
+                    if (endptr != rx_buf + 2) {
+                        if (roll_val >  60.0f) roll_val =  60.0f;
+                        if (roll_val < -60.0f) roll_val = -60.0f;
+                        g_demo_roll_deg = roll_val;
+                        printf("\n>>> [DEMO] 模拟 Roll 设为 %.2f° <<<\n", roll_val);
+                    } else {
+                        printf("\n>>> 无效 r 命令: %s （用法: r 15 或 r -20） <<<\n", rx_buf);
+                    }
+#else
+                    printf("\n>>> r 命令仅在 MODE_FULL_INTEGRATION + DEMO_MANUAL_ROLL=1 下生效 <<<\n");
+#endif
+                }
                 // 解析具体数字
                 else {
                     char *endptr = NULL;

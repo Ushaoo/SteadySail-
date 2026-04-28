@@ -21,6 +21,7 @@ static const char *TAG = "BLINKER_BR";
 extern volatile float g_forward_thrust;
 extern volatile float g_last_roll_deg;
 extern volatile bool  g_estop_active;
+extern volatile float g_demo_roll_deg;   // DEMO_MANUAL_ROLL 手动横滚角输入
 
 // ============================================================
 // 控件键名（与 Blinker App 面板上的控件键名一致）
@@ -71,6 +72,10 @@ static void on_thrust_slider(const blinker_widget_param_val_t *val)
 //        s <kp> <ki> <kd>   /   b <kp> <ki> <kd>
 //        例：“s 5 1 0.49”、“b 20 1 0”
 //
+//   3) DEMO 手动横滚角输入（与控制台 r 命令同语义）
+//        r <angle>   -> 写入 g_demo_roll_deg，范围 ±60°
+//        例：“r 10”、“r -5”、“r 0”
+//
 // 返回：是否至少成功更新了 1 个参数。
 // ============================================================
 static bool try_parse_and_apply_pid(const char *raw)
@@ -87,6 +92,23 @@ static bool try_parse_and_apply_pid(const char *raw)
         // 先试单参数语法：2 个字母 + 数值
         char k1 = (char)tolower((unsigned char)p[0]);
         char k2 = (char)tolower((unsigned char)p[1]);
+
+        // 单字母语法：r <angle> -> 手动横滚角
+        if (k1 == 'r' && !isalpha((unsigned char)p[1])) {
+            float v = 0;
+            const char *q = p + 1;
+            while (*q == ' ' || *q == '=' || *q == ':' || *q == '\t') q++;
+            if (sscanf(q, "%f", &v) == 1) {
+                if (v >  60.0f) v =  60.0f;
+                if (v < -60.0f) v = -60.0f;
+                g_demo_roll_deg = v;
+                ESP_LOGI(TAG, "[App] 手动横滚角更新: r = %.2f deg", v);
+                any_updated = true;
+                while (*q && (isdigit((unsigned char)*q) || *q == '.' || *q == '-' || *q == '+' || *q == 'e' || *q == 'E')) q++;
+                p = q;
+                continue;
+            }
+        }
         if ((k1 == 's' || k1 == 'b') && (k2 == 'p' || k2 == 'i' || k2 == 'd')
             && !isalpha((unsigned char)p[2])) {
             float v = 0;
@@ -174,11 +196,13 @@ static void on_raw_data(const char *data)
 
 // ============================================================
 // 急停按键回调
-//   Blinker 按键控件会发送 3 种事件：
-//     "press"   -> 长按按下瞬间（忽略，等抬起再判定急停，避免误触）
-//     "pressup" -> 长按抬起    -> 触发急停 (g_estop_active = true)
-//     "tap"     -> 短按        -> 解除急停 / 重启控制 (g_estop_active = false)
-//   其他文本（如 "stop"/"start"）也兼容处理，方便手动调试。
+//   交互逻辑（防误触：短按急停，长按解除）：
+//     "tap"            -> 短按        -> 触发急停 (STOPPED)
+//     "press"          -> 长按按下    -> 忽略，等抬起再判定
+//     "pressup"        -> 长按抬起    -> 解除急停 (RUNNING)
+//     "stop"/"off"     -> 自定义文本  -> 急停
+//     "start"/"on"     -> 自定义文本  -> 解除急停
+//     其他未知字符串                 -> toggle 兜底
 // ============================================================
 static void on_estop(const blinker_widget_param_val_t *val)
 {
@@ -190,18 +214,20 @@ static void on_estop(const blinker_widget_param_val_t *val)
     ESP_LOGW(TAG, "[App] 急停按键收到: '%s'", s);
 
     if (strcasecmp(s, "press") == 0) {
-        // 仅记录，等待 pressup
+        // 长按按下瞬间 -> 忽略，避免误触；等待 pressup 再解除
         return;
-    } else if (strcasecmp(s, "pressup") == 0 ||
-               strcasecmp(s, "stop")    == 0 ||
-               strcasecmp(s, "off")     == 0) {
+    } else if (strcasecmp(s, "tap")  == 0 ||
+               strcasecmp(s, "stop") == 0 ||
+               strcasecmp(s, "off")  == 0) {
+        // 短按 / 明确停止语义 -> 急停
         g_estop_active = true;
-    } else if (strcasecmp(s, "tap")    == 0 ||
-               strcasecmp(s, "start")  == 0 ||
-               strcasecmp(s, "on")     == 0) {
+    } else if (strcasecmp(s, "pressup") == 0 ||
+               strcasecmp(s, "start")   == 0 ||
+               strcasecmp(s, "on")      == 0) {
+        // 长按抬起 / 明确启动语义 -> 解除急停
         g_estop_active = false;
     } else {
-        // 未知事件 -> 反转，作为兜底
+        // 未知字符串 -> 翻转兜底
         g_estop_active = !g_estop_active;
     }
     ESP_LOGW(TAG, "[App] 急停状态 -> %s",
@@ -220,7 +246,7 @@ static void on_estop(const blinker_widget_param_val_t *val)
 // 同时为了 100% 保证一次上报只发一条 publish，所有字段在同一个 200ms
 // 静默窗口内连续 send（实际只用几毫秒），由 SDK 合并成单条 MQTT 消息。
 // ============================================================
-#define REPORT_PERIOD_MS  2500
+#define REPORT_PERIOD_MS  2000
 
 static void send_number(const char *key, double value)
 {

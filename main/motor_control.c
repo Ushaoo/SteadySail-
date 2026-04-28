@@ -25,9 +25,13 @@ static const char *TAG = "MOTOR";
 #define THRUST_LEFT_CHANNEL      LEDC_CHANNEL_2
 #define THRUST_RIGHT_CHANNEL     LEDC_CHANNEL_3
 
-// 保存最后下发的实际 PWM 脉宽值
+// 保存最后下发的实际 PWM 脉宽值（推力大电机）
 static uint32_t last_pwm_left_us = 1500;
 static uint32_t last_pwm_right_us = 1500;
+
+// 保存最后下发的转向舵机 PWM 脉宽值（已经过反转/限幅，与硬件实际波形一致）
+static uint32_t last_steer_pwm_left_us = 1500;
+static uint32_t last_steer_pwm_right_us = 1500;
 
 // 将微秒脉宽转为 LEDC 控制寄存器的占空比值
 // 50Hz频率 -> 周期20000us，14位分辨率 -> 0~16383
@@ -131,27 +135,48 @@ void motor_control_set_steering_pwm(uint32_t pwm_left_us, uint32_t pwm_right_us)
     pwm_left_us = 1500;
     pwm_right_us = 1500;
 #endif
-    
-    // 限制脉宽范围
-    pwm_left_us = (pwm_left_us < 1000) ? 1000 : (pwm_left_us > 2000) ? 2000 : pwm_left_us;
-    pwm_right_us = (pwm_right_us < 1000) ? 1000 : (pwm_right_us > 2000) ? 2000 : pwm_right_us;
+
+    // 应用硬件层方向反转开关（围绕 1500 镜像）
+#if STEER_LEFT_INVERT
+    pwm_left_us  = 3000 - pwm_left_us;
+#endif
+#if STEER_RIGHT_INVERT
+    pwm_right_us = 3000 - pwm_right_us;
+#endif
+
+    // 安全限幅（由 system_config.h 集中配置）
+    if (pwm_left_us  < STEER_PWM_MIN_US) pwm_left_us  = STEER_PWM_MIN_US;
+    if (pwm_left_us  > STEER_PWM_MAX_US) pwm_left_us  = STEER_PWM_MAX_US;
+    if (pwm_right_us < STEER_PWM_MIN_US) pwm_right_us = STEER_PWM_MIN_US;
+    if (pwm_right_us > STEER_PWM_MAX_US) pwm_right_us = STEER_PWM_MAX_US;
     
     // 直接操作 LEDC
     uint32_t duty_L = us_to_duty(pwm_left_us);
     uint32_t duty_R = us_to_duty(pwm_right_us);
-    
+
+    last_steer_pwm_left_us  = pwm_left_us;
+    last_steer_pwm_right_us = pwm_right_us;
+
     ledc_set_duty(LEDC_MODE, STEER_LEFT_CHANNEL, duty_L);
     ledc_update_duty(LEDC_MODE, STEER_LEFT_CHANNEL);
     ledc_set_duty(LEDC_MODE, STEER_RIGHT_CHANNEL, duty_R);
     ledc_update_duty(LEDC_MODE, STEER_RIGHT_CHANNEL);
-    
-    vTaskDelay(pdMS_TO_TICKS(30));
+    // 注：LEDC 是硬件生成 PWM，update_duty 后下一个周期立即生效，不需 vTaskDelay。
+    // 之前这里随意加 30ms 会拖慢 100Hz 控制循环 → PID 严重超调。
 }
 
 #define THRUST_SCALE 0.55f   // 力矩转 PWM 的比例系数（源自 Python）
 
 // ===== 双向推力下发（支持反转）=====
 void motor_control_set_pwm_bidirectional(float push_L, float push_R, bool invert_L, bool invert_R) {
+    // 应用硬件层方向反转开关（由 system_config.h 集中配置）
+#if THRUST_LEFT_INVERT
+    invert_L = !invert_L;
+#endif
+#if THRUST_RIGHT_INVERT
+    invert_R = !invert_R;
+#endif
+
     // 限幅：推力范围 0 ~ 500
     if (push_L < 0.0f) push_L = 0.0f;
     if (push_L > 500.0f) push_L = 500.0f;
@@ -184,10 +209,12 @@ void motor_control_set_pwm_bidirectional(float push_L, float push_R, bool invert
     thrust_R = 1500;
 #endif
 
-    // 安全限制：PWM 范围 [1450, 1550] (相对中立1500的±50范围)
-    thrust_L = (thrust_L < 1400) ? 1400 : (thrust_L > 1600) ? 1600 : thrust_L;
-    thrust_R = (thrust_R < 1400) ? 1400 : (thrust_R > 1600) ? 1600 : thrust_R;
-    
+    // 安全限幅（由 system_config.h 集中配置）
+    if (thrust_L < THRUST_PWM_MIN_US) thrust_L = THRUST_PWM_MIN_US;
+    if (thrust_L > THRUST_PWM_MAX_US) thrust_L = THRUST_PWM_MAX_US;
+    if (thrust_R < THRUST_PWM_MIN_US) thrust_R = THRUST_PWM_MIN_US;
+    if (thrust_R > THRUST_PWM_MAX_US) thrust_R = THRUST_PWM_MAX_US;
+
     // 保存实际下发的PWM值
     last_pwm_left_us = thrust_L;
     last_pwm_right_us = thrust_R;
@@ -200,12 +227,18 @@ void motor_control_set_pwm_bidirectional(float push_L, float push_R, bool invert
     ledc_update_duty(LEDC_MODE, THRUST_LEFT_CHANNEL);
     ledc_set_duty(LEDC_MODE, THRUST_RIGHT_CHANNEL, duty_R);
     ledc_update_duty(LEDC_MODE, THRUST_RIGHT_CHANNEL);
-    
-    vTaskDelay(pdMS_TO_TICKS(30));
 }
 
 // ===== 闭环矢量推力下发 =====
 void motor_control_set_pwm_vector(float pwm_L, float pwm_R) {
+    // 应用硬件层方向反转开关（由 system_config.h 集中配置）
+#if THRUST_LEFT_INVERT
+    pwm_L = -pwm_L;
+#endif
+#if THRUST_RIGHT_INVERT
+    pwm_R = -pwm_R;
+#endif
+
     // 基础限幅 (0 ~ 500 表示 1500us ~ 2000us 的推进范围，不支持负数即反转)
     if (pwm_L < 0.0f) pwm_L = 0.0f;
     if (pwm_L > 500.0f) pwm_L = 500.0f;
@@ -230,9 +263,11 @@ void motor_control_set_pwm_vector(float pwm_L, float pwm_R) {
     thrust_R = 1500;
 #endif
 
-    // 绝对安全限制：PWM 范围 [1450, 1550] (相对中立1500的±50范围)
-    thrust_L = (thrust_L < 1450) ? 1450 : (thrust_L > 1550) ? 1550 : thrust_L;
-    thrust_R = (thrust_R < 1450) ? 1450 : (thrust_R > 1550) ? 1550 : thrust_R;
+    // 安全限幅（由 system_config.h 集中配置）
+    if (thrust_L < THRUST_PWM_MIN_US) thrust_L = THRUST_PWM_MIN_US;
+    if (thrust_L > THRUST_PWM_MAX_US) thrust_L = THRUST_PWM_MAX_US;
+    if (thrust_R < THRUST_PWM_MIN_US) thrust_R = THRUST_PWM_MIN_US;
+    if (thrust_R > THRUST_PWM_MAX_US) thrust_R = THRUST_PWM_MAX_US;
 
     // 直接操作 LEDC
     uint32_t duty_L = us_to_duty(thrust_L);
@@ -242,13 +277,16 @@ void motor_control_set_pwm_vector(float pwm_L, float pwm_R) {
     ledc_update_duty(LEDC_MODE, THRUST_LEFT_CHANNEL);
     ledc_set_duty(LEDC_MODE, THRUST_RIGHT_CHANNEL, duty_R);
     ledc_update_duty(LEDC_MODE, THRUST_RIGHT_CHANNEL);
-    
-    vTaskDelay(pdMS_TO_TICKS(30));
 }
 
 void motor_control_get_last_pwm(uint32_t *pwm_left_us, uint32_t *pwm_right_us) {
     if (pwm_left_us) *pwm_left_us = last_pwm_left_us;
     if (pwm_right_us) *pwm_right_us = last_pwm_right_us;
+}
+
+void motor_control_get_last_steer_pwm(uint32_t *pwm_left_us, uint32_t *pwm_right_us) {
+    if (pwm_left_us)  *pwm_left_us  = last_steer_pwm_left_us;
+    if (pwm_right_us) *pwm_right_us = last_steer_pwm_right_us;
 }
 
 void motor_control_emergency_stop(void) {
@@ -265,8 +303,6 @@ void motor_control_emergency_stop(void) {
     ledc_update_duty(LEDC_MODE, THRUST_LEFT_CHANNEL);
     ledc_set_duty(LEDC_MODE, THRUST_RIGHT_CHANNEL, duty_neutral);
     ledc_update_duty(LEDC_MODE, THRUST_RIGHT_CHANNEL);
-    
-    vTaskDelay(pdMS_TO_TICKS(30));
 }
 
 // ======================= 大电机 (ESC) 校准专有序列 =======================

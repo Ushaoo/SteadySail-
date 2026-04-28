@@ -25,6 +25,10 @@ void motor_control_set_pwm_bidirectional(float push_L, float push_R, bool invert
 // 获取最后下发的实际 PWM 脉宽（单位：us，范围 1000-2000）
 void motor_control_get_last_pwm(uint32_t *pwm_left_us, uint32_t *pwm_right_us);
 
+// 获取最近一次下发到转向舵机（小电机）的 PWM 脉宽（us，范围 1000~2000）
+// 已经包含硬件反转开关与安全限幅后的实际值
+void motor_control_get_last_steer_pwm(uint32_t *pwm_left_us, uint32_t *pwm_right_us);
+
 // 紧急停止所有输出 (切回 1500 停转)
 void motor_control_emergency_stop(void);
 

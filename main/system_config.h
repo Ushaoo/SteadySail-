@@ -12,7 +12,16 @@
 #define MODE_TEST_IMU_ONLY       5  // 🎯IMU 数据专用测试：实时打印原始和融合数据
 
 // 当前激活的模式 (编译前修改这里)
-#define CURRENT_RUN_MODE   MODE_FULL_INTEGRATION 
+#define CURRENT_RUN_MODE   MODE_FULL_INTEGRATION
+
+// ==========================================
+// 1.1 FULL_INTEGRATION 演示开关
+//   1 = 手动模拟 Roll 角（忽略 IMU，仅 MODE_FULL_INTEGRATION 生效）
+//       串口输入 `r <角度>` 设置模拟 Roll，舱机会按该角度动作
+//       供展会演示舱机转动逻辑使用（设备不在水中，IMU不动也能看到舵机响应）
+//   0 = 正常使用 IMU 读数
+// ==========================================
+#define DEMO_MANUAL_ROLL         1
 // ==========================================
 // 1.5. 转向控制模式开关
 // ==========================================
@@ -57,6 +66,45 @@
 #define ENABLE_I2C_RECOVERY    1    // 开启 I2C 错误重试与自救
 #define ENABLE_EMERGENCY_STOP  1    // 开启倾角过大断电保护 (>60度)
 #define I2C_RETRY_COUNT        3    // I2C 失败重试次数
+
+// ------------------------------------------
+// ⚠️ 调试限幅：PWM 输出范围（中立 1500 us，改这里可以全局限制推力/转角）
+//   - 调试期建议取小，避免涨车/损坏舵机
+//   - 所有 motor_control_* 下发函数都会被强制 clamp 到该范围
+// ------------------------------------------
+// 主推进器（大电机 / ESC）调试限幅：1500 ± 偏移
+#define THRUST_PWM_MIN_US      1400    // 默认 1500 - 50
+#define THRUST_PWM_MAX_US      1600    // 默认 1500 + 50
+
+// 转向舵机（小电机）调试限幅：1500 ± 偏移
+//   舵机机械范围一般是 1000~2000；调试期可设小一点限位
+#define STEER_PWM_MIN_US       1000    // 默认 1500 - 500
+#define STEER_PWM_MAX_US       2000    // 默认 1500 + 500
+
+// ------------------------------------------
+// ⚙️ 方向反转开关（硬件装好后，按观察到的现象切 0/1，无需改控制逻辑）
+//
+//   验证方法（每个独立测试，失败就把对应开关改 1）：
+//     1. THRUST_*_INVERT     -> 给正向推力，桨片应"向后吹水让船前进"。若反了 -> 设 1
+//     2. STEER_*_INVERT      -> set_target(170°) 后，编码器读数应往 170 靠。若往 190 走 -> 设 1
+//                               （即 PWM 增加方向与角度增加方向相反）
+//     3. ENC_*_REVERSE       -> 手动转动舵机，编码器应该数值递增；若递减 -> 设 1
+//
+//   说明：
+//     - 推力反转：在 motor_control_set_pwm_bidirectional 内做，等价于
+//       把 invert_L/R 再异或一次
+//     - 舵机反转：把舵机 PWM 围绕 1500 镜像（pwm = 3000 - pwm）
+//     - 编码器反转：在 steering_control 里读取角度后做 angle = 360 - angle
+// ------------------------------------------
+#define THRUST_LEFT_INVERT     0    // 0=正常, 1=反转左推进器输出方向
+#define THRUST_RIGHT_INVERT    0    // 0=正常, 1=反转右推进器输出方向
+
+#define STEER_LEFT_INVERT      1    // 0=正常, 1=反转左舵机 PWM 方向
+#define STEER_RIGHT_INVERT     1    // 0=正常, 1=反转右舵机 PWM 方向
+
+#define ENC_LEFT_REVERSE       0    // 0=正常, 1=反转左编码器读数0
+
+#define ENC_RIGHT_REVERSE      0    // 0=正常, 1=反转右编码器读数
 
 // ==========================================
 // 5. 物理与控制参数 (原 Python 映射)

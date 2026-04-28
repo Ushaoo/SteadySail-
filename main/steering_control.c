@@ -27,7 +27,6 @@ static float target_right = 180.0f;
 // 编码器初始校准偏移值
 static float offset_left = 0.0f;
 static float offset_right = 0.0f;
-
 // 编码器滤波缓存（简单直通）
 static float filtered_angle_left = 180.0f;
 static float filtered_angle_right = 180.0f;
@@ -138,7 +137,16 @@ void steering_control_get_current_angles(float *left_deg, float *right_deg) {
     // 相对于初始校准点的角度
     raw_left = raw_left - offset_left;
     raw_right = raw_right - offset_right;
-    
+
+    // 应用编码器方向反转开关（由 system_config.h 集中配置）
+    // 以 180° 为镜像中心，源于校准后初始位是 180°
+#if ENC_LEFT_REVERSE
+    raw_left = 360.0f - raw_left;
+#endif
+#if ENC_RIGHT_REVERSE
+    raw_right = 360.0f - raw_right;
+#endif
+
     // 将原始角度归一化到 [0, 360) 范围
     while (raw_left < 0.0f) raw_left += 360.0f;
     while (raw_left >= 360.0f) raw_left -= 360.0f;
@@ -204,8 +212,8 @@ static float calculate_pid(float error, float *integral, float *prev_error, floa
     *out_filt = *out_filt + alpha * (raw_out - *out_filt);
 
     float final_out = *out_filt;
-    if (final_out > 150.0f) final_out = 150.0f;
-    if (final_out < -150.0f) final_out = -150.0f;
+    if (final_out > 500.0f) final_out = 500.0f;
+    if (final_out < -500.0f) final_out = -500.0f;
     
     // 输出阈值：避免小于25的信号导致电机微弱运转
     if (fabsf(final_out) < 20.0f) {
