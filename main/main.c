@@ -216,66 +216,63 @@ void control_core_task(void *pvParameters) {
                 steering_control_set_target(180.0f, 180.0f); // 翻车后舵机回正向下
                 steering_control_update(); 
             } else {
-                // ====== 核心：反向推进平衡方案（相反垂直力矢量） ======
-                // 1. 获取目标前进推力幅值 (映射到 0~500 范围)
+                // ====== 核心：同向差值平衡方案 ======
+                // 两侧推力的竖直分量方向相同（均向下），靠"幅值差"产生平衡力矩；
+                // 两侧水平分量保持相等（都等于 H_thrust），从而前进而不偏航。
+                // 弱侧 V=0 → 舵机角度更偏水平；强侧 V 大 → 舵机角度更接近竖直。
+
+                // 1. 目标前进推力（水平分量），两侧相等
                 float H_thrust = (g_forward_thrust / 100.0f) * 500.0f;
-                
-                // 计算平衡所需的竖直推力幅值（绝对值）
-                #define THRUST_SCALE 0.55f 
-                float V_balance_abs = fabsf(state.tau_total) * THRUST_SCALE; 
+
+                // 2. 平衡所需的竖直差值（带符号）
+                #define THRUST_SCALE 0.55f
+                float dV = state.tau_total * THRUST_SCALE;  // 带符号
                 g_last_roll_deg = state.roll_deg;
-                
-                // 3. 判断需要的反转状态
-                // tau_total > 0: 左倾，需要左推力向下、右推力向上
-                bool invert_L = state.tau_total < 0.0f;  // 右倾时左反转
-                bool invert_R = state.tau_total > 0.0f;  // 左倾时右反转
-                
-                // 4. 计算目标矢量角度（基于H_thrust和V_balance_abs）
-                // atan2f(Horizontal, Vertical) 算出偏离竖直的角度
-                float theta_L_rad = atan2f(H_thrust, V_balance_abs);
-                float theta_R_rad = atan2f(H_thrust, V_balance_abs);
-                float theta_L_deg = theta_L_rad * 180.0f / M_PI;
-                float theta_R_deg = theta_R_rad * 180.0f / M_PI;
-                
-                // 5. 映射到舵机物理角度
-                // 左：180为向下，减去角度得到斜向前下
-                // 右：180为向下，加上角度得到斜向前下（与左对称）
+
+                // 3. 分配两侧竖直分量（均 ≥ 0，方向相同——都朝下）
+                //    约定：tau_total > 0 时需要左侧竖直推力更大（与原 invert 逻辑保持一致）
+                float V_L = (dV > 0.0f) ?  dV : 0.0f;
+                float V_R = (dV < 0.0f) ? -dV : 0.0f;
+
+                // 4. 由 (V, H) 解算每侧的舵机偏角与推力幅值
+                //    θ = atan2(H, V)，T = √(V² + H²)
+                float theta_L_rad = atan2f(H_thrust, V_L);
+                float theta_R_rad = atan2f(H_thrust, V_R);
+                float theta_L_deg = theta_L_rad * 180.0f / (float)M_PI;
+                float theta_R_deg = theta_R_rad * 180.0f / (float)M_PI;
+
+                float T_L_target = sqrtf(V_L * V_L + H_thrust * H_thrust);
+                float T_R_target = sqrtf(V_R * V_R + H_thrust * H_thrust);
+
+                // 5. 映射到舵机物理角度（180° = 正向下；左右对称地向前倾）
                 float target_angle_L = 180.0f - theta_L_deg;
                 float target_angle_R = 180.0f + theta_R_deg;
-                
+
                 // 6. 舵机指令平滑滤波
                 filter_target_L = filter_target_L * 0.9f + target_angle_L * 0.1f;
                 filter_target_R = filter_target_R * 0.9f + target_angle_R * 0.1f;
-                
+
                 steering_control_set_target(filter_target_L, filter_target_R);
-                
-                // 7. 计算最终推力（结合实际舵机角度的闭环补偿）
+
+                // 7. 闭环补偿：根据实际舵机角度，保证竖直分量足够（不被衰减）
                 float act_theta_L_deg = 180.0f - cur_steer_left;
                 float act_theta_R_deg = cur_steer_right - 180.0f;
-                
-                float cos_L = cosf(act_theta_L_deg * M_PI / 180.0f);
-                float cos_R = cosf(act_theta_R_deg * M_PI / 180.0f);
-                
-                // 避免cos为0
+                float cos_L = cosf(act_theta_L_deg * (float)M_PI / 180.0f);
+                float cos_R = cosf(act_theta_R_deg * (float)M_PI / 180.0f);
                 if (cos_L < 0.05f) cos_L = 0.05f;
                 if (cos_R < 0.05f) cos_R = 0.05f;
-                
-                // 需要补偿舵机角度导致的推力衰减
-                float T_L_target = sqrtf(V_balance_abs*V_balance_abs + H_thrust*H_thrust);
-                float T_R_target = sqrtf(V_balance_abs*V_balance_abs + H_thrust*H_thrust);
-                
-                float T_L_safe = V_balance_abs / cos_L;
-                float T_R_safe = V_balance_abs / cos_R;
-                
+
+                float T_L_safe = V_L / cos_L;
+                float T_R_safe = V_R / cos_R;
                 float T_L_final = fmaxf(T_L_target, T_L_safe);
                 float T_R_final = fmaxf(T_R_target, T_R_safe);
-                
-                // 保存平衡参数用于串口输出显示
+
+                // 保存显示用
                 last_tau_total = state.tau_total;
-                last_V_balance = V_balance_abs;
-                
-                // 8. 下发反向推力指令
-                motor_control_set_pwm_bidirectional(T_L_final, T_R_final, invert_L, invert_R);
+                last_V_balance = fabsf(dV);
+
+                // 8. 下发推力指令——两侧"同向"（均不反转），幅度差产生平衡力矩
+                motor_control_set_pwm_bidirectional(T_L_final, T_R_final, false, false);
             }
         } else {
             // I2C 读取失败保护
@@ -329,10 +326,9 @@ void control_core_task(void *pvParameters) {
             uint32_t actual_pwm_L, actual_pwm_R;
             motor_control_get_last_pwm(&actual_pwm_L, &actual_pwm_R);
             
-            printf("Fwd:%.1f%% | TgtL:%.1f (Act:%.1f) | TgtR:%.1f (Act:%.1f) | Roll:%.2f | PWM_L:%u PWM_R:%u | Tau:%.0f V_bal:%.0f | Invert:%d/%d | Enc:%s/%s\n", 
+            printf("Fwd:%.1f%% | TgtL:%.1f (Act:%.1f) | TgtR:%.1f (Act:%.1f) | Roll:%.2f | PWM_L:%u PWM_R:%u | Tau:%.0f dV:%.0f | Enc:%s/%s\n", 
                    g_forward_thrust, filter_target_L, cur_steer_left, filter_target_R, cur_steer_right, 
                    state.roll_deg, actual_pwm_L, actual_pwm_R, last_tau_total, last_V_balance,
-                   (state.tau_total > 0 ? 0 : 1), (state.tau_total > 0 ? 1 : 0),
                    enc_left_fault ? "X" : "✓", enc_right_fault ? "X" : "✓");
             print_cnt = 0;
         }

@@ -1,7 +1,7 @@
 {
     "version":            "1",
     "project_name":       "version_2",
-    "project_version":    "0579e26-dirty",
+    "project_version":    "e713e81-dirty",
     "project_path":       "D:/SteadySail--1",
     "idf_path":           "C:/Espressif/frameworks/esp-idf-v4.4.8",
     "build_dir":          "D:/SteadySail--1/build",
