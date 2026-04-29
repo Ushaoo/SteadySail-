@@ -41,17 +41,18 @@
 #define PIN_I2C1_SCL    11
 
 // --- 转向编码器输入 (MT6826S 脉宽捕获) ---
-#define PIN_ENC_LEFT    4
-#define PIN_ENC_RIGHT   5
+#define PIN_ENC_LEFT    5
+#define PIN_ENC_RIGHT   4
 
 // --- 转向小电机 PWM 输出 ---
-#define PIN_STEER_LEFT  1
-#define PIN_STEER_RIGHT 2
+#define PIN_STEER_LEFT  2
+#define PIN_STEER_RIGHT 1
 
 // --- 主推进器 (电调 ESC) PWM 输出 ---
 // ESP32-S3 LEDC LOW_SPEED 支持的GPIO: 0-19, 21-25, 26-33
 #define PIN_THRUST_LEFT  18
 #define PIN_THRUST_RIGHT 19
+
 
 // ==========================================
 // 3. IMU 配置开关 (单/双 IMU 切换)
@@ -96,8 +97,8 @@
 //     - 舵机反转：把舵机 PWM 围绕 1500 镜像（pwm = 3000 - pwm）
 //     - 编码器反转：在 steering_control 里读取角度后做 angle = 360 - angle
 // ------------------------------------------
-#define THRUST_LEFT_INVERT     0    // 0=正常, 1=反转左推进器输出方向
-#define THRUST_RIGHT_INVERT    0    // 0=正常, 1=反转右推进器输出方向
+#define THRUST_LEFT_INVERT     1    // 0=正常, 1=反转左推进器输出方向
+#define THRUST_RIGHT_INVERT    1    // 0=正常, 1=反转右推进器输出方向
 
 #define STEER_LEFT_INVERT      1    // 0=正常, 1=反转左舵机 PWM 方向
 #define STEER_RIGHT_INVERT     1    // 0=正常, 1=反转右舵机 PWM 方向

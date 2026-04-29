@@ -111,7 +111,7 @@ void steering_control_init(void) {
 
 void steering_control_set_target(float target_left_deg, float target_right_deg) {
     target_left = 360.0f - target_left_deg;
-    target_right = target_right_deg;
+    target_right = 360.0f - target_right_deg;
 }
 
 void steering_control_calibrate_encoders(void) {
