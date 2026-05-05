@@ -21,7 +21,7 @@
 //       供展会演示舱机转动逻辑使用（设备不在水中，IMU不动也能看到舵机响应）
 //   0 = 正常使用 IMU 读数
 // ==========================================
-#define DEMO_MANUAL_ROLL         1
+#define DEMO_MANUAL_ROLL         0
 // ==========================================
 // 1.5. 转向控制模式开关
 // ==========================================
@@ -74,8 +74,8 @@
 //   - 所有 motor_control_* 下发函数都会被强制 clamp 到该范围
 // ------------------------------------------
 // 主推进器（大电机 / ESC）调试限幅：1500 ± 偏移
-#define THRUST_PWM_MIN_US      1400    // 默认 1500 - 50
-#define THRUST_PWM_MAX_US      1600    // 默认 1500 + 50
+#define THRUST_PWM_MIN_US      1200    // 默认 1500 - 50
+#define THRUST_PWM_MAX_US      1800    // 默认 1500 + 50
 
 // 转向舵机（小电机）调试限幅：1500 ± 偏移
 //   舵机机械范围一般是 1000~2000；调试期可设小一点限位
@@ -97,8 +97,8 @@
 //     - 舵机反转：把舵机 PWM 围绕 1500 镜像（pwm = 3000 - pwm）
 //     - 编码器反转：在 steering_control 里读取角度后做 angle = 360 - angle
 // ------------------------------------------
-#define THRUST_LEFT_INVERT     1    // 0=正常, 1=反转左推进器输出方向
-#define THRUST_RIGHT_INVERT    1    // 0=正常, 1=反转右推进器输出方向
+#define THRUST_LEFT_INVERT     0    // 0=正常, 1=反转左推进器输出方向
+#define THRUST_RIGHT_INVERT    0    // 0=正常, 1=反转右推进器输出方向
 
 #define STEER_LEFT_INVERT      1    // 0=正常, 1=反转左舵机 PWM 方向
 #define STEER_RIGHT_INVERT     1    // 0=正常, 1=反转右舵机 PWM 方向

@@ -5,9 +5,16 @@
 #include "driver/gpio.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 #include <math.h>
 
 static const char *TAG = "STEERING";
+
+// NVS namespace / key
+#define STEER_NVS_NS       "steering"
+#define STEER_NVS_KEY_OFFL "off_l"
+#define STEER_NVS_KEY_OFFR "off_r"
 
 // --- 编码器硬件捕获 (MT6826S PWM 模式) ---
 typedef struct {
@@ -30,6 +37,9 @@ static float offset_right = 0.0f;
 // 编码器滤波缓存（简单直通）
 static float filtered_angle_left = 180.0f;
 static float filtered_angle_right = 180.0f;
+
+// 是否已经完成"竖直 → 180°"校准（NVS 加载成功 或 用户手动触发过）
+static bool s_calibrated = false;
 
 // --- ISR 外部中断处理函数 ---
 static void IRAM_ATTR encoder_isr_handler(void* arg) {
@@ -60,24 +70,23 @@ static void IRAM_ATTR encoder_isr_handler(void* arg) {
 }
 
 // 占空比转角度 (0~360)
-// MT6826S 编码器：占空比范围 5-95% 对应 0-360°
+// MT6826S 编码器：占空比 ~1%~99% 对应 0~360°（数据手册端点附近留有最小高/低脉宽保护）
 static float compute_angle(volatile uint32_t high_us, volatile uint32_t period_us, volatile bool valid) {
     if (!valid || period_us == 0) return 0.0f;
     
     uint32_t total_period = high_us + period_us;
     float duty_cycle = (float)high_us / (float)total_period;
     
-    // MT6826 占空比范围映射: 5% -> 0°, 95% -> 360°
-    // angle = (duty - 0.05) / 0.90 * 360 = (duty - 0.05) * 400
-    const float DC_MIN = 0.05f;  // 5%
-    const float DC_MAX = 0.95f;  // 95%
-    const float RANGE = DC_MAX - DC_MIN;  // 90%
+    // 端点放宽到 MT6826S 真实范围：1% -> 0°, 99% -> 360°
+    const float DC_MIN = 0.01f;
+    const float DC_MAX = 0.99f;
+    const float RANGE = DC_MAX - DC_MIN;  // 98%
     
     float angle = (duty_cycle - DC_MIN) / RANGE * 360.0f;
     
-    // 角度范围限制到 [0, 360)
-    while (angle < 0.0f) angle += 360.0f;
-    while (angle >= 360.0f) angle -= 360.0f;
+    // 端点饱和（clamp，不再 wrap）：避免边缘抖动跨 0/360 翻转
+    if (angle < 0.0f)   angle = 0.0f;
+    if (angle > 360.0f) angle = 360.0f;
     
     return angle;
 }
@@ -87,6 +96,38 @@ static float shortest_angle_error(float target, float current) {
     float err = target - current;
     while (err > 180.0f)  err -= 360.0f;
     while (err < -180.0f) err += 360.0f;
+    return err;
+}
+
+// ---------- NVS 校准存取 ----------
+static esp_err_t nvs_load_offsets(float *off_l, float *off_r) {
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(STEER_NVS_NS, NVS_READONLY, &h);
+    if (err != ESP_OK) return err;
+
+    union { uint32_t u; float f; } cvt_l, cvt_r;
+    err = nvs_get_u32(h, STEER_NVS_KEY_OFFL, &cvt_l.u);
+    if (err == ESP_OK) {
+        err = nvs_get_u32(h, STEER_NVS_KEY_OFFR, &cvt_r.u);
+    }
+    nvs_close(h);
+    if (err != ESP_OK) return err;
+
+    *off_l = cvt_l.f;
+    *off_r = cvt_r.f;
+    return ESP_OK;
+}
+
+static esp_err_t nvs_save_offsets(float off_l, float off_r) {
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(STEER_NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) return err;
+
+    union { uint32_t u; float f; } cvt_l = { .f = off_l }, cvt_r = { .f = off_r };
+    err = nvs_set_u32(h, STEER_NVS_KEY_OFFL, cvt_l.u);
+    if (err == ESP_OK) err = nvs_set_u32(h, STEER_NVS_KEY_OFFR, cvt_r.u);
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
     return err;
 }
 
@@ -103,10 +144,24 @@ void steering_control_init(void) {
     gpio_install_isr_service(0);
     gpio_isr_handler_add(PIN_ENC_LEFT, encoder_isr_handler, (void*)&enc_left);
     gpio_isr_handler_add(PIN_ENC_RIGHT, encoder_isr_handler, (void*)&enc_right);
-    
+
     ESP_LOGI(TAG, "✓ Steering Encoder Interrupts Initialized.");
     ESP_LOGI(TAG, "  - Left Encoder GPIO: %d | Right Encoder GPIO: %d", PIN_ENC_LEFT, PIN_ENC_RIGHT);
-    ESP_LOGI(TAG, "  - 启动后自动校准编码器（保持舵机竖直向下）");
+
+    // 尝试从 NVS 加载上次保存的零点偏移
+    float loaded_l = 0.0f, loaded_r = 0.0f;
+    if (nvs_load_offsets(&loaded_l, &loaded_r) == ESP_OK) {
+        offset_left  = loaded_l;
+        offset_right = loaded_r;
+        filtered_angle_left  = 180.0f;
+        filtered_angle_right = 180.0f;
+        s_calibrated = true;
+        ESP_LOGI(TAG, "✓ 已从 NVS 加载校准: offset_L=%.2f° offset_R=%.2f°", offset_left, offset_right);
+    } else {
+        s_calibrated = false;
+        ESP_LOGW(TAG, "⚠ 未发现校准数据，舵机已锁定 PWM=1500。");
+        ESP_LOGW(TAG, "  请把舵机摆到正下方（180° 竖直）并发送 'cal' 命令完成首次校准。");
+    }
 }
 
 void steering_control_set_target(float target_left_deg, float target_right_deg) {
@@ -114,20 +169,32 @@ void steering_control_set_target(float target_left_deg, float target_right_deg) 
     target_right = 360.0f - target_right_deg;
 }
 
-void steering_control_calibrate_encoders(void) {
+void steering_control_calibrate_and_save(void) {
     // 读取当前编码器的竖直状态值作为校准基准
-    float cal_left = compute_angle(enc_left.high_us, enc_left.period_us, enc_left.valid);
+    float cal_left  = compute_angle(enc_left.high_us,  enc_left.period_us,  enc_left.valid);
     float cal_right = compute_angle(enc_right.high_us, enc_right.period_us, enc_right.valid);
-    
+
     // 设置偏移使得初始竖直状态对应 180°（避免 0/360 边界抖动）
-    offset_left = cal_left - 180.0f;
+    offset_left  = cal_left  - 180.0f;
     offset_right = cal_right - 180.0f;
-    
+
     // 初始化滤波缓存
-    filtered_angle_left = 180.0f;
+    filtered_angle_left  = 180.0f;
     filtered_angle_right = 180.0f;
-    
-    ESP_LOGI(TAG, "Encoder Calibration Complete. Offset Left: %.1f°, Offset Right: %.1f°", offset_left, offset_right);
+
+    s_calibrated = true;
+    ESP_LOGI(TAG, "Encoder Calibration Complete. Offset Left: %.2f°, Offset Right: %.2f°", offset_left, offset_right);
+
+    esp_err_t err = nvs_save_offsets(offset_left, offset_right);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "✓ 校准已保存到 NVS（重启后自动加载，无需再次校准）");
+    } else {
+        ESP_LOGE(TAG, "✗ 保存校准到 NVS 失败: %s", esp_err_to_name(err));
+    }
+}
+
+bool steering_control_is_calibrated(void) {
+    return s_calibrated;
 }
 
 void steering_control_get_current_angles(float *left_deg, float *right_deg) {
@@ -167,20 +234,11 @@ void steering_control_get_encoder_status(bool *left_ok, bool *right_ok) {
 static float calculate_pid(float error, float *integral, float *prev_error, float *out_filt) {
     // PID 增益从全局变量读取（可通过 Blinker 实时调参）
     const float kp = g_steer_kp, ki = g_steer_ki, kd = g_steer_kd, dt = 0.01f;
-    const float deadband = 3.0f, blend = 3.0f;
     const float integral_max = 80.0f;
 
-    // 死区与平滑
-    float abs_err = fabsf(error);
+    // 注：外层 steering_control_update() 已经用 DEADZONE=3° 做了死区门控，
+    // 这里不再叠加 smoothstep，避免 4°~6° 小误差被双重削弱后落到 0。
     float err_smooth = error;
-    if (abs_err <= deadband) {
-        err_smooth = 0.0f;
-        *integral = 0.0f;
-    } else if (abs_err < deadband + blend) {
-        float t = (abs_err - deadband) / blend;
-        float factor = t * t * (3.0f - 2.0f * t);
-        err_smooth = (error > 0 ? 1.0f : -1.0f) * (abs_err - deadband) * factor;
-    }
 
     // P 项
     float p_out = kp * err_smooth;
@@ -215,15 +273,11 @@ static float calculate_pid(float error, float *integral, float *prev_error, floa
     if (final_out > 500.0f) final_out = 500.0f;
     if (final_out < -500.0f) final_out = -500.0f;
     
-    // 输出阈值：避免小于25的信号导致电机微弱运转
-    if (fabsf(final_out) < 20.0f) {
+    // 输出阈值：避免小于阈值的信号导致电机微弱运转
+    if (fabsf(final_out) < 30.0f) {
         final_out = 0.0f;
-    }else if (fabsf(final_out) < 30.0f && fabsf(final_out) >= 20.0f) {
-        if (final_out > 0) {
-            final_out = 30.0f;
-        } else {
-            final_out = -30.0f;
-        }
+    } else if (fabsf(final_out) < 60.0f) {        // 提高到 60
+        final_out = (final_out > 0) ? 60.0f : -60.0f;
     }
     
 
@@ -236,6 +290,12 @@ static float prev_err_left = 0.0f, prev_err_right = 0.0f;
 static float out_filt_left = 0.0f, out_filt_right = 0.0f;
 
 void steering_control_update(void) {
+    // 未校准 → 强制中立位 PWM=1500（最安全：360° 连续舵机此时不旋转）
+    if (!s_calibrated) {
+        motor_control_set_steering_pwm(1500, 1500);
+        return;
+    }
+
     float cur_left, cur_right;
     steering_control_get_current_angles(&cur_left, &cur_right);
 

@@ -85,7 +85,7 @@ esp_err_t blinker_timesync_start(void)
 
     xTaskCreate(blinker_timesync_task, 
                 "blinker_timesync",
-                2 * 1024,
+                4 * 1024,
                 NULL,
                 6,
                 NULL);

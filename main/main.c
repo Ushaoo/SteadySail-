@@ -216,63 +216,129 @@ void control_core_task(void *pvParameters) {
                 steering_control_set_target(180.0f, 180.0f); // 翻车后舵机回正向下
                 steering_control_update(); 
             } else {
-                // ====== 核心：同向差值平衡方案 ======
-                // 两侧推力的竖直分量方向相同（均向下），靠"幅值差"产生平衡力矩；
-                // 两侧水平分量保持相等（都等于 H_thrust），从而前进而不偏航。
-                // 弱侧 V=0 → 舵机角度更偏水平；强侧 V 大 → 舵机角度更接近竖直。
+                // ====== 核心：相反竖直分量 + 相同水平分量平衡方案（不反转电机） ======
+                // 利用舵机能旋转过 180° 的能力：一侧桨翻到上半圆即可"正转却向下推"。
+                //   - 两侧水平分量都 = H_thrust  → 直行不偏航
+                //   - 两侧竖直分量等大反向 (+dV / -dV) → 产生纠偏力矩
+                //   - 两侧推力幅值相等  → 同时无电机反转
+                //
+                // 角度约定（θ：舵机物理角，0~360°，180°=正下）
+                //   右桨：θ_R = 180° − atan2(H, V_R) × 180/π
+                //   左桨：θ_L = 180° + atan2(H, V_L) × 180/π
+                //   推力：T = √(V² + H²)
 
                 // 1. 目标前进推力（水平分量），两侧相等
                 float H_thrust = (g_forward_thrust / 100.0f) * 500.0f;
 
-                // 2. 平衡所需的竖直差值（带符号）
+                // 2. 平衡所需的竖直分量（带符号）
                 #define THRUST_SCALE 0.55f
                 float dV = state.tau_total * THRUST_SCALE;  // 带符号
                 g_last_roll_deg = state.roll_deg;
 
-                // 3. 分配两侧竖直分量（均 ≥ 0，方向相同——都朝下）
-                //    约定：tau_total > 0 时需要左侧竖直推力更大（与原 invert 逻辑保持一致）
-                float V_L = (dV > 0.0f) ?  dV : 0.0f;
-                float V_R = (dV < 0.0f) ? -dV : 0.0f;
+                // 3. 两侧竖直分量等大反向
+                //    约定：tau_total > 0 → 右侧向上、左侧向下
+                float V_R =  dV;   // 向上为正
+                float V_L = -dV;
 
-                // 4. 由 (V, H) 解算每侧的舵机偏角与推力幅值
-                //    θ = atan2(H, V)，T = √(V² + H²)
-                float theta_L_rad = atan2f(H_thrust, V_L);
-                float theta_R_rad = atan2f(H_thrust, V_R);
-                float theta_L_deg = theta_L_rad * 180.0f / (float)M_PI;
-                float theta_R_deg = theta_R_rad * 180.0f / (float)M_PI;
+                // 4. 由 (V, H) 解算舵机偏角与推力幅值
+                //    atan2(H, V) ∈ (-π, π]，可直接覆盖 0~360° 全部映射
+                //    特别注意：dV=0 且 H=0 时 V_L = -0.0f，atan2(0,-0) = π，会让左舵机跑到 0°；
+                //    所以这里显式处理"零矢量"情形，保持 180° 中立。
+                const float ZERO_EPS = 1e-3f;
+                float phi_R_deg, phi_L_deg;
+                if (fabsf(V_R) < ZERO_EPS && fabsf(H_thrust) < ZERO_EPS) {
+                    phi_R_deg = 0.0f;
+                } else {
+                    phi_R_deg = atan2f(H_thrust, V_R) * 180.0f / (float)M_PI;
+                }
+                if (fabsf(V_L) < ZERO_EPS && fabsf(H_thrust) < ZERO_EPS) {
+                    phi_L_deg = 0.0f;
+                } else {
+                    phi_L_deg = atan2f(H_thrust, V_L) * 180.0f / (float)M_PI;
+                }
 
-                float T_L_target = sqrtf(V_L * V_L + H_thrust * H_thrust);
                 float T_R_target = sqrtf(V_R * V_R + H_thrust * H_thrust);
+                float T_L_target = sqrtf(V_L * V_L + H_thrust * H_thrust);
 
-                // 5. 映射到舵机物理角度（180° = 正向下；左右对称地向前倾）
-                float target_angle_L = 180.0f - theta_L_deg;
-                float target_angle_R = 180.0f + theta_R_deg;
+                // 5. 映射到舵机物理角度（左右镜像，左 +、右 −）
+                float target_angle_R = 180.0f - phi_R_deg;
+                float target_angle_L = 180.0f + phi_L_deg;
 
-                // 6. 舵机指令平滑滤波
-                filter_target_L = filter_target_L * 0.9f + target_angle_L * 0.1f;
-                filter_target_R = filter_target_R * 0.9f + target_angle_R * 0.1f;
+                // 归一化到 [0, 360)
+                while (target_angle_L < 0.0f)    target_angle_L += 360.0f;
+                while (target_angle_L >= 360.0f) target_angle_L -= 360.0f;
+                while (target_angle_R < 0.0f)    target_angle_R += 360.0f;
+                while (target_angle_R >= 360.0f) target_angle_R -= 360.0f;
 
-                steering_control_set_target(filter_target_L, filter_target_R);
+                // 6. 舵机指令平滑滤波（注意环形，避免穿越 0/360 边界产生反向跳变）
+                float diff_L = target_angle_L - filter_target_L;
+                while (diff_L > 180.0f)  diff_L -= 360.0f;
+                while (diff_L < -180.0f) diff_L += 360.0f;
+                filter_target_L += 0.1f * diff_L;
+                while (filter_target_L < 0.0f)    filter_target_L += 360.0f;
+                while (filter_target_L >= 360.0f) filter_target_L -= 360.0f;
 
-                // 7. 闭环补偿：根据实际舵机角度，保证竖直分量足够（不被衰减）
-                float act_theta_L_deg = 180.0f - cur_steer_left;
-                float act_theta_R_deg = cur_steer_right - 180.0f;
-                float cos_L = cosf(act_theta_L_deg * (float)M_PI / 180.0f);
-                float cos_R = cosf(act_theta_R_deg * (float)M_PI / 180.0f);
-                if (cos_L < 0.05f) cos_L = 0.05f;
-                if (cos_R < 0.05f) cos_R = 0.05f;
+                float diff_R = target_angle_R - filter_target_R;
+                while (diff_R > 180.0f)  diff_R -= 360.0f;
+                while (diff_R < -180.0f) diff_R += 360.0f;
+                filter_target_R += 0.1f * diff_R;
+                while (filter_target_R < 0.0f)    filter_target_R += 360.0f;
+                while (filter_target_R >= 360.0f) filter_target_R -= 360.0f;
 
-                float T_L_safe = V_L / cos_L;
-                float T_R_safe = V_R / cos_R;
-                float T_L_final = fmaxf(T_L_target, T_L_safe);
-                float T_R_final = fmaxf(T_R_target, T_R_safe);
+                // ⚠ 实测：左右物理装配相对算法是镜像的，此处把 L/R 整组互换下发
+                //    互换后角度公式语义也跟着反了，所以再绕 180° 镜像一次（360 - x）
+                float send_tgt_L = 360.0f - filter_target_R;
+                float send_tgt_R = 360.0f - filter_target_L;
+                while (send_tgt_L < 0.0f)    send_tgt_L += 360.0f;
+                while (send_tgt_L >= 360.0f) send_tgt_L -= 360.0f;
+                while (send_tgt_R < 0.0f)    send_tgt_R += 360.0f;
+                while (send_tgt_R >= 360.0f) send_tgt_R -= 360.0f;
+                steering_control_set_target(send_tgt_L, send_tgt_R);
+
+                // 7. 推力下发——两侧均不反转（电机一律 PWM > 1500），方向完全由舵机决定
+                //
+                // 【舵机就位率门控】方案 A：上升非对称限速，下降不门控
+                //   r = max(0, 1 - |Δθ|/θ_tol)  ∈ [0,1]
+                //   T_out = T_prev + r * (T_cmd - T_prev)   (仅当 T_cmd > T_prev)
+                //   T_out = T_cmd                            (T_cmd <= T_prev 直通)
+                //   左右独立计算。物理左舵机 ↔ 物理左电机（接收 T_R_target，因为 L/R 已互换）
+                static float last_thrust_motor_L = 0.0f;   // 物理左电机上一拍下发推力
+                static float last_thrust_motor_R = 0.0f;   // 物理右电机上一拍下发推力
+                const float SERVO_TOL_DEG = 15.0f;
+
+                // 物理左侧：目标角 send_tgt_L，实际 cur_steer_left；门控 T_R_target（送给物理左电机）
+                float err_servo_L = send_tgt_L - cur_steer_left;
+                while (err_servo_L >  180.0f) err_servo_L -= 360.0f;
+                while (err_servo_L < -180.0f) err_servo_L += 360.0f;
+                float r_L = 1.0f - fabsf(err_servo_L) / SERVO_TOL_DEG;
+                if (r_L < 0.0f) r_L = 0.0f;
+                if (r_L > 1.0f) r_L = 1.0f;
+
+                float thrust_motor_L = T_R_target;  // L/R 已互换：物理左电机收 T_R_target
+                if (thrust_motor_L > last_thrust_motor_L) {
+                    thrust_motor_L = last_thrust_motor_L + r_L * (thrust_motor_L - last_thrust_motor_L);
+                }
+                last_thrust_motor_L = thrust_motor_L;
+
+                // 物理右侧：目标角 send_tgt_R，实际 cur_steer_right；门控 T_L_target（送给物理右电机）
+                float err_servo_R = send_tgt_R - cur_steer_right;
+                while (err_servo_R >  180.0f) err_servo_R -= 360.0f;
+                while (err_servo_R < -180.0f) err_servo_R += 360.0f;
+                float r_R = 1.0f - fabsf(err_servo_R) / SERVO_TOL_DEG;
+                if (r_R < 0.0f) r_R = 0.0f;
+                if (r_R > 1.0f) r_R = 1.0f;
+
+                float thrust_motor_R = T_L_target;  // L/R 已互换：物理右电机收 T_L_target
+                if (thrust_motor_R > last_thrust_motor_R) {
+                    thrust_motor_R = last_thrust_motor_R + r_R * (thrust_motor_R - last_thrust_motor_R);
+                }
+                last_thrust_motor_R = thrust_motor_R;
+
+                motor_control_set_pwm_bidirectional(thrust_motor_L, thrust_motor_R, false, false);
 
                 // 保存显示用
                 last_tau_total = state.tau_total;
                 last_V_balance = fabsf(dV);
-
-                // 8. 下发推力指令——两侧"同向"（均不反转），幅度差产生平衡力矩
-                motor_control_set_pwm_bidirectional(T_L_final, T_R_final, false, false);
             }
         } else {
             // I2C 读取失败保护
@@ -326,8 +392,17 @@ void control_core_task(void *pvParameters) {
             uint32_t actual_pwm_L, actual_pwm_R;
             motor_control_get_last_pwm(&actual_pwm_L, &actual_pwm_R);
             
+            // 转换到与编码器一致的"物理角"坐标显示，方便对比
+            // (steering_control_set_target 内部对两侧都做了 360 - x 翻转)
+            float disp_tgt_L = 360.0f - filter_target_L;
+            float disp_tgt_R = 360.0f - filter_target_R;
+            while (disp_tgt_L < 0.0f)    disp_tgt_L += 360.0f;
+            while (disp_tgt_L >= 360.0f) disp_tgt_L -= 360.0f;
+            while (disp_tgt_R < 0.0f)    disp_tgt_R += 360.0f;
+            while (disp_tgt_R >= 360.0f) disp_tgt_R -= 360.0f;
+
             printf("Fwd:%.1f%% | TgtL:%.1f (Act:%.1f) | TgtR:%.1f (Act:%.1f) | Roll:%.2f | PWM_L:%u PWM_R:%u | Tau:%.0f dV:%.0f | Enc:%s/%s\n", 
-                   g_forward_thrust, filter_target_L, cur_steer_left, filter_target_R, cur_steer_right, 
+                   g_forward_thrust, disp_tgt_L, cur_steer_left, disp_tgt_R, cur_steer_right, 
                    state.roll_deg, actual_pwm_L, actual_pwm_R, last_tau_total, last_V_balance,
                    enc_left_fault ? "X" : "✓", enc_right_fault ? "X" : "✓");
             print_cnt = 0;
@@ -351,11 +426,13 @@ void app_main(void)
     }
     balance_controller_init();
     motor_control_init();
-    steering_control_init(); // 开启外部中断读取编码器
+    steering_control_init(); // 开启外部中断读取编码器；内部会尝试从 NVS 加载历史校准
 
-    // 等待编码器稳定后进行校准（竖直状态下将编码器值设为0点基准）
+    // 注意：不再每次启动都自动校准。
+    //  - 若 NVS 中已有保存的零点偏移，steering_control_init() 会自动加载。
+    //  - 若 NVS 中没有数据（首次烧录后），舵机被锁定在 PWM=1500 中立位；
+    //    用户把舵机摆正下方后，串口输入 'cal' 即可完成首次校准并写入 NVS。
     vTaskDelay(pdMS_TO_TICKS(100));
-    steering_control_calibrate_encoders();
 
     ESP_LOGI(TAG, "SteadySail 就绪，当前模式: %d", CURRENT_RUN_MODE);
 
@@ -386,6 +463,13 @@ void app_main(void)
             if (ch == '\r' || ch == '\n') {
                 if (rx_len > 0) {
                     rx_buf[rx_len] = '\0';
+                    if (strcmp(rx_buf, "cal") == 0 || strcmp(rx_buf, "CAL") == 0) {
+                        printf("\n>>> [CAL] 开始校准舵机零点（请确认舵机已摆正下方）...\n");
+                        steering_control_calibrate_and_save();
+                        printf(">>> [CAL] 校准完成，已写入 NVS。下次上电将自动加载。 <<<\n");
+                        rx_len = 0;
+                        continue;
+                    }
                     char *endptr = NULL;
                     float input_val = strtof(rx_buf, &endptr);
                     if (endptr != rx_buf) {
@@ -435,19 +519,28 @@ void app_main(void)
                     g_forward_thrust = 0.0f;
                     printf("\n>>> 推力归零！原地自平衡！ <<<\n");
                 } 
+                // 校准舵机零点：把舵机摆到正下方（180° 竖直）后输入 'cal'
+                else if (strcmp(rx_buf, "cal") == 0 || strcmp(rx_buf, "CAL") == 0) {
+                    printf("\n>>> [CAL] 开始校准舵机零点（请确认舵机已摆正下方）...\n");
+                    steering_control_calibrate_and_save();
+                    printf(">>> [CAL] 校准完成，已写入 NVS。下次上电将自动加载。 <<<\n");
+                }
                 // 演示模式：r <角度>  设置模拟 Roll
-                else if ((rx_buf[0] == 'r' || rx_buf[0] == 'R') &&
-                         (rx_buf[1] == ' ' || rx_buf[1] == '=' || rx_buf[1] == ':')) {
+                //   支持写法：r 15 / r=15 / r:15 / r15 / r-20
+                else if ((rx_buf[0] == 'r' || rx_buf[0] == 'R') && rx_len >= 2) {
 #if (CURRENT_RUN_MODE == MODE_FULL_INTEGRATION) && DEMO_MANUAL_ROLL
+                    // 跳过 r 后可能存在的分隔符（空格 / = / :）
+                    char *p = rx_buf + 1;
+                    while (*p == ' ' || *p == '=' || *p == ':') p++;
                     char *endptr = NULL;
-                    float roll_val = strtof(rx_buf + 2, &endptr);
-                    if (endptr != rx_buf + 2) {
+                    float roll_val = strtof(p, &endptr);
+                    if (endptr != p) {
                         if (roll_val >  60.0f) roll_val =  60.0f;
                         if (roll_val < -60.0f) roll_val = -60.0f;
                         g_demo_roll_deg = roll_val;
                         printf("\n>>> [DEMO] 模拟 Roll 设为 %.2f° <<<\n", roll_val);
                     } else {
-                        printf("\n>>> 无效 r 命令: %s （用法: r 15 或 r -20） <<<\n", rx_buf);
+                        printf("\n>>> 无效 r 命令: %s （用法: r15 / r 15 / r-20） <<<\n", rx_buf);
                     }
 #else
                     printf("\n>>> r 命令仅在 MODE_FULL_INTEGRATION + DEMO_MANUAL_ROLL=1 下生效 <<<\n");

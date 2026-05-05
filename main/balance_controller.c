@@ -2,6 +2,7 @@
 #include "system_config.h"
 #include "control_params.h"
 #include <math.h>
+#include <stdbool.h>
 
 // --- 双 IMU Mahony 算法全局变量 ---
 static float q0 = 1.0f, q1 = 0.0f, q2 = 0.0f, q3 = 0.0f;
@@ -12,6 +13,13 @@ static float pid_integral = 0.0f;
 static float gyro_bias_x = 0.0f, gyro_bias_y = 0.0f, gyro_bias_z = 0.0f;
 static int gyro_calibration_counter = 0;
 #define GYRO_CALIBRATION_SAMPLES 200  // 2秒内收集200个样本校准零偏
+
+// 姿态零点校准（陀螺仪校准结束后再让 Mahony 收敛若干样本，然后把 roll/pitch/yaw 锁为 0）
+static float attitude_offset_roll = 0.0f;
+static float attitude_offset_pitch = 0.0f;
+static float attitude_offset_yaw = 0.0f;
+static bool  attitude_offset_captured = false;
+#define ATTITUDE_SETTLE_SAMPLES   100   // gyro 校准完后再等约 1s 让 Mahony 稳态收敛
 
 #define ALPHA_ACC  0.98f
 #define WEIGHT_DYN 0.8f
@@ -49,6 +57,14 @@ void balance_controller_init(void) {
     prev_omega_filtered = 0.0f;
     pid_integral = 0.0f;
     imu1_var = 1.0f; imu2_var = 1.0f;
+
+    // 重置姿态零点
+    attitude_offset_roll  = 0.0f;
+    attitude_offset_pitch = 0.0f;
+    attitude_offset_yaw   = 0.0f;
+    attitude_offset_captured = false;
+    gyro_calibration_counter = 0;
+    gyro_bias_x = gyro_bias_y = gyro_bias_z = 0.0f;
 }
 
 void balance_controller_update(dual_imu_data_t *imu_data, balance_state_t *state) {
@@ -171,6 +187,42 @@ void balance_controller_update(dual_imu_data_t *imu_data, balance_state_t *state
     state->roll_deg = atan2f(2.0f * (q0*q1 + q2*q3), 1.0f - 2.0f * (q1*q1 + q2*q2)) * 180.0f / M_PI;
     state->pitch_deg = asinf(2.0f * (q0*q2 - q3*q1)) * 180.0f / M_PI;
     state->yaw_deg = atan2f(2.0f * (q0*q3 + q1*q2), 1.0f - 2.0f * (q2*q2 + q3*q3)) * 180.0f / M_PI;
+
+    // **********************************************
+    // 1.5 姿态零点校准（启动后 Mahony 收敛后锁零）
+    // **********************************************
+    if (!attitude_offset_captured) {
+        // gyro 校准已结束 (前面 if 已 return)，这里再等 ATTITUDE_SETTLE_SAMPLES 个样本让姿态稳态
+        static int settle_cnt = 0;
+        settle_cnt++;
+        if (settle_cnt >= ATTITUDE_SETTLE_SAMPLES) {
+            attitude_offset_roll  = state->roll_deg;
+            attitude_offset_pitch = state->pitch_deg;
+            attitude_offset_yaw   = state->yaw_deg;
+            attitude_offset_captured = true;
+        }
+        // 收敛期内对外保持 0
+        state->roll_deg = 0.0f;
+        state->pitch_deg = 0.0f;
+        state->yaw_deg = 0.0f;
+        state->omega_filtered = 0.0f;
+        state->alpha = 0.0f;
+        state->tau_ff = 0.0f;
+        state->tau_pid = 0.0f;
+        state->tau_total = 0.0f;
+        return;
+    }
+
+    // 减去启动时锁定的姿态零点，并归一化到 [-180, 180]
+    state->roll_deg  -= attitude_offset_roll;
+    state->pitch_deg -= attitude_offset_pitch;
+    state->yaw_deg   -= attitude_offset_yaw;
+    while (state->roll_deg  >  180.0f) state->roll_deg  -= 360.0f;
+    while (state->roll_deg  < -180.0f) state->roll_deg  += 360.0f;
+    while (state->pitch_deg >  180.0f) state->pitch_deg -= 360.0f;
+    while (state->pitch_deg < -180.0f) state->pitch_deg += 360.0f;
+    while (state->yaw_deg   >  180.0f) state->yaw_deg   -= 360.0f;
+    while (state->yaw_deg   < -180.0f) state->yaw_deg   += 360.0f;
 
     // **********************************************
     // 2. 前馈与 PID 控制律计算

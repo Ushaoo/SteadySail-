@@ -76,6 +76,10 @@ static void on_thrust_slider(const blinker_widget_param_val_t *val)
 //        r <angle>   -> 写入 g_demo_roll_deg，范围 ±60°
 //        例：“r 10”、“r -5”、“r 0”
 //
+//   4) 前进推力输入（与控制台数字输入等价，范围 ±100）
+//        f <percent> -> 写入 g_forward_thrust
+//        例：“f 30”、“f -20”、“f 0”
+//
 // 返回：是否至少成功更新了 1 个参数。
 // ============================================================
 static bool try_parse_and_apply_pid(const char *raw)
@@ -103,6 +107,23 @@ static bool try_parse_and_apply_pid(const char *raw)
                 if (v < -60.0f) v = -60.0f;
                 g_demo_roll_deg = v;
                 ESP_LOGI(TAG, "[App] 手动横滚角更新: r = %.2f deg", v);
+                any_updated = true;
+                while (*q && (isdigit((unsigned char)*q) || *q == '.' || *q == '-' || *q == '+' || *q == 'e' || *q == 'E')) q++;
+                p = q;
+                continue;
+            }
+        }
+
+        // 单字母语法：f <percent> -> 前进推力 (-100 ~ 100)
+        if (k1 == 'f' && !isalpha((unsigned char)p[1])) {
+            float v = 0;
+            const char *q = p + 1;
+            while (*q == ' ' || *q == '=' || *q == ':' || *q == '\t') q++;
+            if (sscanf(q, "%f", &v) == 1) {
+                if (v >  100.0f) v =  100.0f;
+                if (v < -100.0f) v = -100.0f;
+                g_forward_thrust = v;
+                ESP_LOGI(TAG, "[App] 前进推力更新: f = %.1f %%", v);
                 any_updated = true;
                 while (*q && (isdigit((unsigned char)*q) || *q == '.' || *q == '-' || *q == '+' || *q == 'e' || *q == 'E')) q++;
                 p = q;
