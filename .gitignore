@@ -1,0 +1,61 @@
+# ===== ESP-IDF =====
+build/
+sdkconfig.old
+sdkconfig.defaults.*.old
+managed_components/
+dependencies.lock
+
+# ESP-IDF generated files
+*.bin
+*.elf
+*.map
+
+# ===== VS Code =====
+.vscode/*
+!.vscode/settings.json
+!.vscode/c_cpp_properties.json
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
+.vscode/ipch/
+
+# ===== CMake =====
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CMakeScripts/
+Testing/
+Makefile
+*.cmake
+!CMakeLists.txt
+compile_commands.json
+
+# ===== Python (raspberry_pi_backup) =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
+
+# ===== Editors / IDEs =====
+.idea/
+*.swp
+*.swo
+*.bak
+
+# ===== Logs / temp =====
+*.log
+*.tmp
+*.temp
