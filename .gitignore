@@ -11,13 +11,7 @@ dependencies.lock
 *.map
 
 # ===== VS Code =====
-.vscode/*
-!.vscode/settings.json
-!.vscode/c_cpp_properties.json
-!.vscode/launch.json
-!.vscode/tasks.json
-!.vscode/extensions.json
-.vscode/ipch/
+.vscode/
 
 # ===== CMake =====
 CMakeFiles/
