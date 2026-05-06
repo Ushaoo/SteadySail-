@@ -4,7 +4,7 @@
 cmake_minimum_required(VERSION 3.5)
 
 file(MAKE_DIRECTORY
-  "C:/Espressif/frameworks/esp-idf-v4.4.8/components/bootloader/subproject"
+  "C:/Espressif/frameworks/esp-idf-v4.4.8/frameworks/esp-idf-v4.4.8/components/bootloader/subproject"
   "D:/SteadySail--1/build/bootloader"
   "D:/SteadySail--1/build/bootloader-prefix"
   "D:/SteadySail--1/build/bootloader-prefix/tmp"

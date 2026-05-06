@@ -1,5 +1,5 @@
 {
-    "idf.currentSetup": "C:/Espressif/frameworks/esp-idf-v4.4.8/",
+    "idf.currentSetup": "C:/Espressif/frameworks/esp-idf-v4.4.8/frameworks/esp-idf-v4.4.8/",
     "idf.flashType": "UART",
     "idf.openOcdConfigs": [
         "board/esp32s3-builtin.cfg"
@@ -7,5 +7,6 @@
     "idf.portWin": "COM11",
     "idf.customExtraVars": {
         "IDF_TARGET": "esp32s3"
-    }
+    },
+    "idf.monitorPort": "COM11"
 }

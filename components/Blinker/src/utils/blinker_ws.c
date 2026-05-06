@@ -158,7 +158,7 @@ static esp_err_t echo_handler(httpd_req_t *req)
     return ret;
 }
 
-static esp_err_t ws_connect_handler(httpd_req_t *req)
+static esp_err_t __attribute__((unused)) ws_connect_handler(httpd_req_t *req)
 {
     char *buf = "{\"state\":\"connected\"}\n";
     // httpd_ws_frame_t ws_pkt;
@@ -175,7 +175,6 @@ static const httpd_uri_t ws = {
         .uri        = "/",
         .method     = HTTP_GET,
         .handler    = echo_handler,
-        .connect_cb = ws_connect_handler,
         .user_ctx   = NULL,
         .is_websocket = true
 };

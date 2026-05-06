@@ -1,0 +1,172 @@
+Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+Compiler: C:/Espressif/frameworks/esp-idf-v4.4.8/tools/xtensa-esp32s3-elf/esp-2021r2-patch5-8.4.0/xtensa-esp32s3-elf/bin/xtensa-esp32s3-elf-gcc.exe 
+Build flags: -mlongcalls;
+Id flags:  
+
+The output was:
+1
+cc1.exe: fatal error: CMakeCCompilerId.c: No such file or directory
+compilation terminated.
+
+
+Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+Compiler: C:/Espressif/frameworks/esp-idf-v4.4.8/tools/xtensa-esp32s3-elf/esp-2021r2-patch5-8.4.0/xtensa-esp32s3-elf/bin/xtensa-esp32s3-elf-gcc.exe 
+Build flags: -mlongcalls;
+Id flags: -c 
+
+The output was:
+1
+xtensa-esp32s3-elf-gcc.exe: error: CMakeCCompilerId.c: No such file or directory
+xtensa-esp32s3-elf-gcc.exe: fatal error: no input files
+compilation terminated.
+
+
+Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+Compiler: C:/Espressif/frameworks/esp-idf-v4.4.8/tools/xtensa-esp32s3-elf/esp-2021r2-patch5-8.4.0/xtensa-esp32s3-elf/bin/xtensa-esp32s3-elf-gcc.exe 
+Build flags: -mlongcalls;
+Id flags: -Aa 
+
+The output was:
+1
+cc1.exe: fatal error: CMakeCCompilerId.c: No such file or directory
+compilation terminated.
+
+
+Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+Compiler: C:/Espressif/frameworks/esp-idf-v4.4.8/tools/xtensa-esp32s3-elf/esp-2021r2-patch5-8.4.0/xtensa-esp32s3-elf/bin/xtensa-esp32s3-elf-gcc.exe 
+Build flags: -mlongcalls;
+Id flags: -D__CLASSIC_C__ 
+
+The output was:
+1
+xtensa-esp32s3-elf-gcc.exe: error: CMakeCCompilerId.c: No such file or directory
+xtensa-esp32s3-elf-gcc.exe: fatal error: no input files
+compilation terminated.
+
+
+Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+Compiler: C:/Espressif/frameworks/esp-idf-v4.4.8/tools/xtensa-esp32s3-elf/esp-2021r2-patch5-8.4.0/xtensa-esp32s3-elf/bin/xtensa-esp32s3-elf-gcc.exe 
+Build flags: -mlongcalls;
+Id flags: --target=arm-arm-none-eabi;-mcpu=cortex-m3 
+
+The output was:
+1
+xtensa-esp32s3-elf-gcc.exe: error: unrecognized command line option '--target=arm-arm-none-eabi'
+xtensa-esp32s3-elf-gcc.exe: error: unrecognized command line option '-mcpu=cortex-m3'
+
+
+Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+Compiler: C:/Espressif/frameworks/esp-idf-v4.4.8/tools/xtensa-esp32s3-elf/esp-2021r2-patch5-8.4.0/xtensa-esp32s3-elf/bin/xtensa-esp32s3-elf-gcc.exe 
+Build flags: -mlongcalls;
+Id flags: -c;-I__does_not_exist__ 
+
+The output was:
+1
+xtensa-esp32s3-elf-gcc.exe: error: CMakeCCompilerId.c: No such file or directory
+xtensa-esp32s3-elf-gcc.exe: fatal error: no input files
+compilation terminated.
+
+
+Compiling the C compiler identification source file "CMakeCCompilerId.c" failed.
+Compiler: C:/Espressif/frameworks/esp-idf-v4.4.8/tools/xtensa-esp32s3-elf/esp-2021r2-patch5-8.4.0/xtensa-esp32s3-elf/bin/xtensa-esp32s3-elf-gcc.exe 
+Build flags: 
+Id flags:  
+
+The output was:
+1
+cc1.exe: fatal error: CMakeCCompilerId.c: No such file or directory
+compilation terminated.
+
+
+Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+Compiler: C:/Espressif/frameworks/esp-idf-v4.4.8/tools/xtensa-esp32s3-elf/esp-2021r2-patch5-8.4.0/xtensa-esp32s3-elf/bin/xtensa-esp32s3-elf-g++.exe 
+Build flags: -mlongcalls;
+Id flags:  
+
+The output was:
+1
+xtensa-esp32s3-elf-g++.exe: error: CMakeCXXCompilerId.cpp: No such file or directory
+xtensa-esp32s3-elf-g++.exe: fatal error: no input files
+compilation terminated.
+
+
+Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+Compiler: C:/Espressif/frameworks/esp-idf-v4.4.8/tools/xtensa-esp32s3-elf/esp-2021r2-patch5-8.4.0/xtensa-esp32s3-elf/bin/xtensa-esp32s3-elf-g++.exe 
+Build flags: -mlongcalls;
+Id flags: -c 
+
+The output was:
+1
+xtensa-esp32s3-elf-g++.exe: error: CMakeCXXCompilerId.cpp: No such file or directory
+xtensa-esp32s3-elf-g++.exe: fatal error: no input files
+compilation terminated.
+
+
+Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+Compiler: C:/Espressif/frameworks/esp-idf-v4.4.8/tools/xtensa-esp32s3-elf/esp-2021r2-patch5-8.4.0/xtensa-esp32s3-elf/bin/xtensa-esp32s3-elf-g++.exe 
+Build flags: -mlongcalls;
+Id flags: --c++ 
+
+The output was:
+1
+xtensa-esp32s3-elf-g++.exe: error: unrecognized command line option '--c++'
+
+
+Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+Compiler: C:/Espressif/frameworks/esp-idf-v4.4.8/tools/xtensa-esp32s3-elf/esp-2021r2-patch5-8.4.0/xtensa-esp32s3-elf/bin/xtensa-esp32s3-elf-g++.exe 
+Build flags: -mlongcalls;
+Id flags: --ec++ 
+
+The output was:
+1
+xtensa-esp32s3-elf-g++.exe: error: CMakeCXXCompilerId.cpp: No such file or directory
+xtensa-esp32s3-elf-g++.exe: error: unrecognized command line option '--ec++'; did you mean '-Weffc++'?
+xtensa-esp32s3-elf-g++.exe: fatal error: no input files
+compilation terminated.
+
+
+Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" failed.
+Compiler: C:/Espressif/frameworks/esp-idf-v4.4.8/tools/xtensa-esp32s3-elf/esp-2021r2-patch5-8.4.0/xtensa-esp32s3-elf/bin/xtensa-esp32s3-elf-g++.exe 
+Build flags: -mlongcalls;
+Id flags: --target=arm-arm-none-eabi;-mcpu=cortex-m3 
+
+The output was:
+1
+xtensa-esp32s3-elf-g++.exe: error: CMakeCXXCompilerId.cpp: No such file or directory
+xtensa-esp32s3-elf-g++.exe: error: unrecognized command line option '--target=arm-arm-none-eabi'
+xtensa-esp32s3-elf-g++.exe: error: unrecognized command line option '-mcpu=cortex-m3'
+xtensa-esp32s3-elf-g++.exe: fatal error: no input files
+compilation terminated.
+
+
+Detecting CXX compiler ABI info failed to compile with the following output:
+Change Dir: D:/SteadySail--1/build/CMakeFiles/CMakeTmp
+
+Run Build Command(s):C:/Espressif/frameworks/esp-idf-v4.4.8/tools/ninja/1.10.2/ninja.exe cmTC_96222 && ninja: error: unknown target 'cmTC_96222'
+
+
+
+
+Detecting C compiler ABI info failed to compile with the following output:
+Change Dir: D:/SteadySail--1/build/CMakeFiles/CMakeTmp
+
+Run Build Command(s):C:/Espressif/frameworks/esp-idf-v4.4.8/tools/ninja/1.10.2/ninja.exe cmTC_0b665 && ninja: error: unknown target 'cmTC_0b665'
+
+
+
+
+Determining if the CXX compiler works failed with the following output:
+Change Dir: D:/SteadySail--1/build/CMakeFiles/CMakeTmp
+
+Run Build Command(s):C:/Espressif/frameworks/esp-idf-v4.4.8/tools/ninja/1.10.2/ninja.exe cmTC_65f29 && ninja: error: unknown target 'cmTC_65f29'
+
+
+
+Determining if the C compiler works failed with the following output:
+Change Dir: D:/SteadySail--1/build/CMakeFiles/CMakeTmp
+
+Run Build Command(s):C:/Espressif/frameworks/esp-idf-v4.4.8/tools/ninja/1.10.2/ninja.exe cmTC_1ea3a && ninja: error: loading 'build.ninja': 系统找不到指定的文件。
+
+
+
+

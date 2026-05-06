@@ -423,7 +423,6 @@ D:/SteadySail--1/build/esp-idf/asio/CMakeFiles/list_install_components.dir
 D:/SteadySail--1/build/esp-idf/asio/CMakeFiles/install.dir
 D:/SteadySail--1/build/esp-idf/asio/CMakeFiles/install/local.dir
 D:/SteadySail--1/build/esp-idf/asio/CMakeFiles/install/strip.dir
-D:/SteadySail--1/build/esp-idf/bt/CMakeFiles/__idf_bt.dir
 D:/SteadySail--1/build/esp-idf/bt/CMakeFiles/edit_cache.dir
 D:/SteadySail--1/build/esp-idf/bt/CMakeFiles/rebuild_cache.dir
 D:/SteadySail--1/build/esp-idf/bt/CMakeFiles/list_install_components.dir

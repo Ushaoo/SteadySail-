@@ -2,6 +2,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "system_config.h"
 #include <math.h>
 #include <string.h>
@@ -132,7 +133,11 @@ void control_core_task(void *pvParameters) {
     // 低通滤波平滑目标角度 (避免舵机高频抖动)
     static float filter_target_L = 180.0f;
     static float filter_target_R = 180.0f;
-    
+
+    // Scheme A 舵机就位率门控历史（提到外层，便于特殊路径下重置）
+    static float last_thrust_motor_L = 0.0f;
+    static float last_thrust_motor_R = 0.0f;
+
     // 保存最后的平衡参数用于显示
     static float last_tau_total = 0.0f;
     static float last_V_balance = 0.0f;
@@ -240,6 +245,34 @@ void control_core_task(void *pvParameters) {
                 float V_R =  dV;   // 向上为正
                 float V_L = -dV;
 
+                // ===== 特殊路径：fwd ≈ 0 时，舵机锁 180°，电机正反转产生上下力 =====
+                // 触发阈值：|H_thrust| < H_DEADZONE（默认对应 1% 推力）
+                // 物理映射（受 L/R 互换影响）：
+                //   原 V_R = +dV → 正常 V3 中作用于物理左电机；这里直接令物理左电机推力 = |dV|，
+                //     正反转方向 = sign(V_R) = sign(dV)
+                //   原 V_L = -dV → 作用于物理右电机；推力 = |dV|，方向 = sign(V_L) = -sign(dV)
+                const float H_DEADZONE = 5.0f;
+                if (fabsf(H_thrust) < H_DEADZONE) {
+                    // 1) 舵机强制中立位 180°（同步把滤波器拉回，避免下次进入 V3 路径时残留）
+                    filter_target_L = 180.0f;
+                    filter_target_R = 180.0f;
+                    steering_control_set_target(180.0f, 180.0f);
+
+                    // 2) 电机正反转产生上下力差
+                    float mag = fabsf(dV);
+                    bool invert_phys_L = (dV < 0.0f);   // 物理左电机方向
+                    bool invert_phys_R = (dV > 0.0f);   // 物理右电机方向
+                    motor_control_set_pwm_bidirectional(mag, mag, invert_phys_L, invert_phys_R);
+
+                    // 3) 重置 Scheme A 历史，避免下次重新进入 V3 路径时 last_thrust 残留导致跳变
+                    last_thrust_motor_L = 0.0f;
+                    last_thrust_motor_R = 0.0f;
+
+                    last_tau_total = state.tau_total;
+                    last_V_balance = fabsf(dV);
+                    goto control_loop_tail;  // 跳过下面的 V3 + Scheme A 路径
+                }
+
                 // 4. 由 (V, H) 解算舵机偏角与推力幅值
                 //    atan2(H, V) ∈ (-π, π]，可直接覆盖 0~360° 全部映射
                 //    特别注意：dV=0 且 H=0 时 V_L = -0.0f，atan2(0,-0) = π，会让左舵机跑到 0°；
@@ -302,8 +335,7 @@ void control_core_task(void *pvParameters) {
                 //   T_out = T_prev + r * (T_cmd - T_prev)   (仅当 T_cmd > T_prev)
                 //   T_out = T_cmd                            (T_cmd <= T_prev 直通)
                 //   左右独立计算。物理左舵机 ↔ 物理左电机（接收 T_R_target，因为 L/R 已互换）
-                static float last_thrust_motor_L = 0.0f;   // 物理左电机上一拍下发推力
-                static float last_thrust_motor_R = 0.0f;   // 物理右电机上一拍下发推力
+                //   注：last_thrust_motor_L/R 已提到 control_core_task 函数顶部声明
                 const float SERVO_TOL_DEG = 15.0f;
 
                 // 物理左侧：目标角 send_tgt_L，实际 cur_steer_left；门控 T_R_target（送给物理左电机）
@@ -339,6 +371,8 @@ void control_core_task(void *pvParameters) {
                 // 保存显示用
                 last_tau_total = state.tau_total;
                 last_V_balance = fabsf(dV);
+
+            control_loop_tail: ;  // 特殊路径（fwd≈0，纯反转模式）跳到这里
             }
         } else {
             // I2C 读取失败保护
@@ -470,6 +504,11 @@ void app_main(void)
                         rx_len = 0;
                         continue;
                     }
+                    if (strcmp(rx_buf, "reboot") == 0 || strcmp(rx_buf, "REBOOT") == 0) {
+                        printf("\n>>> [REBOOT] 1 秒后重启 ESP32... <<<\n");
+                        vTaskDelay(pdMS_TO_TICKS(1000));
+                        esp_restart();
+                    }
                     char *endptr = NULL;
                     float input_val = strtof(rx_buf, &endptr);
                     if (endptr != rx_buf) {
@@ -524,6 +563,11 @@ void app_main(void)
                     printf("\n>>> [CAL] 开始校准舵机零点（请确认舵机已摆正下方）...\n");
                     steering_control_calibrate_and_save();
                     printf(">>> [CAL] 校准完成，已写入 NVS。下次上电将自动加载。 <<<\n");
+                }
+                else if (strcmp(rx_buf, "reboot") == 0 || strcmp(rx_buf, "REBOOT") == 0) {
+                    printf("\n>>> [REBOOT] 1 秒后重启 ESP32... <<<\n");
+                    vTaskDelay(pdMS_TO_TICKS(1000));
+                    esp_restart();
                 }
                 // 演示模式：r <角度>  设置模拟 Roll
                 //   支持写法：r 15 / r=15 / r:15 / r15 / r-20
