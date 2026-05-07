@@ -23,6 +23,7 @@ typedef struct {
     volatile uint32_t high_us;
     volatile uint32_t period_us;
     volatile bool valid;
+    volatile uint8_t bad_streak;     // 连续坏帧计数（去抖：连续 N 次才报无效）
 } encoder_state_t;
 
 static encoder_state_t enc_left  = { .pin = PIN_ENC_LEFT, .valid = false };
@@ -48,22 +49,24 @@ static void IRAM_ATTR encoder_isr_handler(void* arg) {
     int64_t now = esp_timer_get_time();
     int64_t delta = now - st->last_edge_time;
 
-    if (delta < 5) return; // 5us 短期毛刺滤波（放开原先的限制）
+    if (delta < 5) return; // 5us 短期毛刺滤波
 
     if (level == 0) {
         // 下降沿：此时的 delta 是高电平时间
         st->high_us = (uint32_t)delta;
     } else {
-        // 上升沿：此时的 delta 是低电平时间（这里利用 period_us 变量存放 low_us）
+        // 上升沿：此时的 delta 是低电平时间（存入 period_us）
         st->period_us = (uint32_t)delta;
-        
-        // 校验整个 PWM 周期（高电平 + 低电平）以确认是一次有效读取
-        // MT6826 的 PWM 周期通常在 1000us 左右，放宽为 100~50000us 防止特定角度的正常占空比被误拦截
+
         uint32_t total = st->high_us + st->period_us;
-        if (total >= 100 && total <= 50000) { 
+        if (total >= 100 && total <= 50000 && st->high_us > 0 && st->period_us > 0) {
             st->valid = true;
+            st->bad_streak = 0;
         } else {
-            st->valid = false;
+            // 去抖：单次坏帧不立即报无效，连续 8 次才翻 valid=false
+            // 一旦下一个完整周期正常，会自动恢复 valid=true（自纠正）
+            if (st->bad_streak < 255) st->bad_streak++;
+            if (st->bad_streak >= 8) st->valid = false;
         }
     }
     st->last_edge_time = now;
@@ -141,7 +144,7 @@ void steering_control_init(void) {
     };
     gpio_config(&io_conf);
 
-    gpio_install_isr_service(0);
+    gpio_install_isr_service(ESP_INTR_FLAG_LEVEL3);
     gpio_isr_handler_add(PIN_ENC_LEFT, encoder_isr_handler, (void*)&enc_left);
     gpio_isr_handler_add(PIN_ENC_RIGHT, encoder_isr_handler, (void*)&enc_right);
 
@@ -165,8 +168,8 @@ void steering_control_init(void) {
 }
 
 void steering_control_set_target(float target_left_deg, float target_right_deg) {
-    target_left = 360.0f - target_left_deg;
-    target_right = 360.0f - target_right_deg;
+    target_left = target_left_deg;
+    target_right = 360-target_right_deg;
 }
 
 void steering_control_calibrate_and_save(void) {
@@ -219,7 +222,46 @@ void steering_control_get_current_angles(float *left_deg, float *right_deg) {
     while (raw_left >= 360.0f) raw_left -= 360.0f;
     while (raw_right < 0.0f) raw_right += 360.0f;
     while (raw_right >= 360.0f) raw_right -= 360.0f;
-    
+
+    // ===== 方案 E：野值剔除 + 一阶 LPF =====
+    // 100Hz 调用，舵机最快 ~360°/s -> 单拍 ≤ 3.6°；任何 >40° 的瞬时跳变视为 EMI 假读，
+    // 保留上一拍 filtered 值，绝不让 PID 看到 0° 或瞬间翻转。
+    const float OUTLIER_DEG = 40.0f;
+    const float LPF_ALPHA   = 0.35f;   // 截止 ~5Hz @ 100Hz
+
+    // 左
+    {
+        float prev = filtered_angle_left;
+        float d = raw_left - prev;
+        while (d >  180.0f) d -= 360.0f;
+        while (d < -180.0f) d += 360.0f;
+        if (!enc_left.valid || fabsf(d) > OUTLIER_DEG) {
+            raw_left = prev;   // 保留上一拍
+        } else {
+            float upd = prev + LPF_ALPHA * d;
+            while (upd < 0.0f)    upd += 360.0f;
+            while (upd >= 360.0f) upd -= 360.0f;
+            filtered_angle_left = upd;
+            raw_left = upd;
+        }
+    }
+    // 右
+    {
+        float prev = filtered_angle_right;
+        float d = raw_right - prev;
+        while (d >  180.0f) d -= 360.0f;
+        while (d < -180.0f) d += 360.0f;
+        if (!enc_right.valid || fabsf(d) > OUTLIER_DEG) {
+            raw_right = prev;
+        } else {
+            float upd = prev + LPF_ALPHA * d;
+            while (upd < 0.0f)    upd += 360.0f;
+            while (upd >= 360.0f) upd -= 360.0f;
+            filtered_angle_right = upd;
+            raw_right = upd;
+        }
+    }
+
     *left_deg = raw_left;
     *right_deg = raw_right;
 }

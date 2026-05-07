@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "cJSON.h"
 #include <string.h>
 #include <stdio.h>
@@ -85,6 +86,21 @@ static void on_thrust_slider(const blinker_widget_param_val_t *val)
 static bool try_parse_and_apply_pid(const char *raw)
 {
     if (raw == NULL) return false;
+
+    // 优先匹配整字串命令：reboot（不区分大小写）
+    {
+        const char *needle = "reboot";
+        size_t nlen = strlen(needle);
+        for (const char *s = raw; *s; s++) {
+            size_t i = 0;
+            while (i < nlen && s[i] && tolower((unsigned char)s[i]) == needle[i]) i++;
+            if (i == nlen) {
+                ESP_LOGW(TAG, "[App] 收到 reboot 指令，1 秒后重启 ESP32...");
+                vTaskDelay(pdMS_TO_TICKS(1000));
+                esp_restart();
+            }
+        }
+    }
 
     bool any_updated = false;
     const char *p = raw;

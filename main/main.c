@@ -346,19 +346,35 @@ void control_core_task(void *pvParameters) {
                 if (r_L < 0.0f) r_L = 0.0f;
                 if (r_L > 1.0f) r_L = 1.0f;
 
-                float thrust_motor_L = T_R_target;  // L/R 已互换：物理左电机收 T_R_target
-                if (thrust_motor_L > last_thrust_motor_L) {
-                    thrust_motor_L = last_thrust_motor_L + r_L * (thrust_motor_L - last_thrust_motor_L);
-                }
-                last_thrust_motor_L = thrust_motor_L;
-
                 // 物理右侧：目标角 send_tgt_R，实际 cur_steer_right；门控 T_L_target（送给物理右电机）
-                float err_servo_R = send_tgt_R - cur_steer_right;
+                // ⚠ 右侧编码器与右侧目标角是镜像参考系（cur=90 物理上等同 send=270），
+                //   先把 cur 镜像到与 send_tgt_R 同一参考系再算 err，否则 |err| 永远~180°，r_R≈0。
+                float cur_steer_right_mirrored = 360.0f - cur_steer_right;
+                while (cur_steer_right_mirrored < 0.0f)    cur_steer_right_mirrored += 360.0f;
+                while (cur_steer_right_mirrored >= 360.0f) cur_steer_right_mirrored -= 360.0f;
+                float err_servo_R = send_tgt_R - cur_steer_right_mirrored;
                 while (err_servo_R >  180.0f) err_servo_R -= 360.0f;
                 while (err_servo_R < -180.0f) err_servo_R += 360.0f;
                 float r_R = 1.0f - fabsf(err_servo_R) / SERVO_TOL_DEG;
                 if (r_R < 0.0f) r_R = 0.0f;
                 if (r_R > 1.0f) r_R = 1.0f;
+
+                // ===== 对称门控 =====
+                // Scheme A 本意：按"最慢就位的一侧"统一限速，保证左右推力上升对称。
+                // 即使在纯前进 / 倾斜转弯任何情况，左右目标都该用同一个 r。
+                // （原先按 |diff_target|<5° 判断对称在此应用中不成立——纯前进时
+                //   两侧舵机本就是镜像关系 ~180° 张开。）
+                {
+                    float r_min = (r_L < r_R) ? r_L : r_R;
+                    r_L = r_min;
+                    r_R = r_min;
+                }
+
+                float thrust_motor_L = T_R_target;  // L/R 已互换：物理左电机收 T_R_target
+                if (thrust_motor_L > last_thrust_motor_L) {
+                    thrust_motor_L = last_thrust_motor_L + r_L * (thrust_motor_L - last_thrust_motor_L);
+                }
+                last_thrust_motor_L = thrust_motor_L;
 
                 float thrust_motor_R = T_L_target;  // L/R 已互换：物理右电机收 T_L_target
                 if (thrust_motor_R > last_thrust_motor_R) {
@@ -428,8 +444,8 @@ void control_core_task(void *pvParameters) {
             
             // 转换到与编码器一致的"物理角"坐标显示，方便对比
             // (steering_control_set_target 内部对两侧都做了 360 - x 翻转)
-            float disp_tgt_L = 360.0f - filter_target_L;
-            float disp_tgt_R = 360.0f - filter_target_R;
+            float disp_tgt_L = filter_target_L;
+            float disp_tgt_R = filter_target_R;
             while (disp_tgt_L < 0.0f)    disp_tgt_L += 360.0f;
             while (disp_tgt_L >= 360.0f) disp_tgt_L -= 360.0f;
             while (disp_tgt_R < 0.0f)    disp_tgt_R += 360.0f;

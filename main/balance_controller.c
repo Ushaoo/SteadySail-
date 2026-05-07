@@ -224,6 +224,11 @@ void balance_controller_update(dual_imu_data_t *imu_data, balance_state_t *state
     while (state->yaw_deg   >  180.0f) state->yaw_deg   -= 360.0f;
     while (state->yaw_deg   < -180.0f) state->yaw_deg   += 360.0f;
 
+    // ---- IMU 横滚方向反转（3° -> -3°）----
+    // 同时反转 roll 角与横滚角速度 gx，保持前馈/PID 极性一致
+    state->roll_deg = -state->roll_deg;
+    gx = -gx;
+
     // **********************************************
     // 2. 前馈与 PID 控制律计算
     // **********************************************

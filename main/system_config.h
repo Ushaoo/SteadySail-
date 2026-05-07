@@ -101,11 +101,11 @@
 #define THRUST_RIGHT_INVERT    0    // 0=正常, 1=反转右推进器输出方向
 
 #define STEER_LEFT_INVERT      1    // 0=正常, 1=反转左舵机 PWM 方向
-#define STEER_RIGHT_INVERT     1    // 0=正常, 1=反转右舵机 PWM 方向
+#define STEER_RIGHT_INVERT     0    // 0=正常, 1=反转右舵机 PWM 方向
 
 #define ENC_LEFT_REVERSE       0    // 0=正常, 1=反转左编码器读数0
 
-#define ENC_RIGHT_REVERSE      0    // 0=正常, 1=反转右编码器读数
+#define ENC_RIGHT_REVERSE      1    // 0=正常, 1=反转右编码器读数
 
 // ==========================================
 // 5. 物理与控制参数 (原 Python 映射)
