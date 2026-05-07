@@ -20,6 +20,9 @@ bool steering_control_is_calibrated(void);
 // 设置两个小电机的目标旋转角度 (0~360度)
 void steering_control_set_target(float target_left_deg, float target_right_deg);
 
+// 获取当前下发的目标角度（与编码器同参考系）
+void steering_control_get_target(float *left_deg, float *right_deg);
+
 // 获取目前的实时物理角度
 void steering_control_get_current_angles(float *left_deg, float *right_deg);
 

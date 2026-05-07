@@ -277,87 +277,122 @@ void control_core_task(void *pvParameters) {
                 //    atan2(H, V) ∈ (-π, π]，可直接覆盖 0~360° 全部映射
                 //    特别注意：dV=0 且 H=0 时 V_L = -0.0f，atan2(0,-0) = π，会让左舵机跑到 0°；
                 //    所以这里显式处理"零矢量"情形，保持 180° 中立。
+                //
+                // ===== 方案 C：H 自动降级以满足舵机角度限制 =====
+                // 舵机发送范围（编码器系）[60°, 300°] 反推到算法系为 target_angle ∈ [60°, 300°]；
+                // target_angle = 180 ± phi ∈ [60, 300] ⇒ |phi| ≤ 120°。
+                // 当 V_i < 0 且 |H/V_i| > tan(60°)=√3 时，|phi| 会超过 120°。
+                // 为保证左右水平分量对称（不 yaw）+ 平衡力矩保留，
+                // 取 H_eff = sign(H) * min(|H|, √3*|V_L|, √3*|V_R|)（V_i<0 才限制）。
+                //
+                // 【V 死区】只有 V_i 显著为负（< -V_DEAD）才触发限制。
+                // 否则微小的 dV 噪声（如 ±0.5）会让 H_max 跌到接近 0，瞬间杀掉前进推力，
+                // 引发"舵机刚到位 → 推力突然消失 → 卡在 PWM 1500"的现象。
+                // V_DEAD=10 对应 ~6.5% 推力等量级，远高于平衡环路噪声。
+                const float TAN60 = 1.7320508f;
+                const float V_DEAD = 10.0f;
+                float H_max = 1.0e9f;  // 初始不限
+                if (V_L < -V_DEAD) {
+                    float lim = TAN60 * fabsf(V_L);
+                    if (lim < H_max) H_max = lim;
+                }
+                if (V_R < -V_DEAD) {
+                    float lim = TAN60 * fabsf(V_R);
+                    if (lim < H_max) H_max = lim;
+                }
+                float H_eff = H_thrust;
+                if (H_eff >  H_max) H_eff =  H_max;
+                if (H_eff < -H_max) H_eff = -H_max;
+
                 const float ZERO_EPS = 1e-3f;
                 float phi_R_deg, phi_L_deg;
-                if (fabsf(V_R) < ZERO_EPS && fabsf(H_thrust) < ZERO_EPS) {
+                if (fabsf(V_R) < ZERO_EPS && fabsf(H_eff) < ZERO_EPS) {
                     phi_R_deg = 0.0f;
                 } else {
-                    phi_R_deg = atan2f(H_thrust, V_R) * 180.0f / (float)M_PI;
+                    phi_R_deg = atan2f(H_eff, V_R) * 180.0f / (float)M_PI;
                 }
-                if (fabsf(V_L) < ZERO_EPS && fabsf(H_thrust) < ZERO_EPS) {
+                if (fabsf(V_L) < ZERO_EPS && fabsf(H_eff) < ZERO_EPS) {
                     phi_L_deg = 0.0f;
                 } else {
-                    phi_L_deg = atan2f(H_thrust, V_L) * 180.0f / (float)M_PI;
+                    phi_L_deg = atan2f(H_eff, V_L) * 180.0f / (float)M_PI;
                 }
 
-                float T_R_target = sqrtf(V_R * V_R + H_thrust * H_thrust);
-                float T_L_target = sqrtf(V_L * V_L + H_thrust * H_thrust);
+                float T_R_target = sqrtf(V_R * V_R + H_eff * H_eff);
+                float T_L_target = sqrtf(V_L * V_L + H_eff * H_eff);
 
                 // 5. 映射到舵机物理角度（左右镜像，左 +、右 −）
+                //    由于方案 C 已保证 |phi| ≤ 120°，target_angle 一定 ∈ [60°, 300°]。
                 float target_angle_R = 180.0f - phi_R_deg;
                 float target_angle_L = 180.0f + phi_L_deg;
 
-                // 归一化到 [0, 360)
-                while (target_angle_L < 0.0f)    target_angle_L += 360.0f;
-                while (target_angle_L >= 360.0f) target_angle_L -= 360.0f;
-                while (target_angle_R < 0.0f)    target_angle_R += 360.0f;
-                while (target_angle_R >= 360.0f) target_angle_R -= 360.0f;
-
-                // 6. 舵机指令平滑滤波（注意环形，避免穿越 0/360 边界产生反向跳变）
+                // 6. 舵机指令平滑滤波
+                //    两端点都在 [60, 300] 连续弧内，不跨 0/360，用普通减法即可；
+                //    不能再用环形最短路径（会穿过 0/360 禁区）。
                 float diff_L = target_angle_L - filter_target_L;
-                while (diff_L > 180.0f)  diff_L -= 360.0f;
-                while (diff_L < -180.0f) diff_L += 360.0f;
                 filter_target_L += 0.1f * diff_L;
-                while (filter_target_L < 0.0f)    filter_target_L += 360.0f;
-                while (filter_target_L >= 360.0f) filter_target_L -= 360.0f;
+                if (filter_target_L < 60.0f)  filter_target_L = 60.0f;
+                if (filter_target_L > 300.0f) filter_target_L = 300.0f;
 
                 float diff_R = target_angle_R - filter_target_R;
-                while (diff_R > 180.0f)  diff_R -= 360.0f;
-                while (diff_R < -180.0f) diff_R += 360.0f;
                 filter_target_R += 0.1f * diff_R;
-                while (filter_target_R < 0.0f)    filter_target_R += 360.0f;
-                while (filter_target_R >= 360.0f) filter_target_R -= 360.0f;
+                if (filter_target_R < 60.0f)  filter_target_R = 60.0f;
+                if (filter_target_R > 300.0f) filter_target_R = 300.0f;
 
                 // ⚠ 实测：左右物理装配相对算法是镜像的，此处把 L/R 整组互换下发
                 //    互换后角度公式语义也跟着反了，所以再绕 180° 镜像一次（360 - x）
+                //    [60, 300] 区间关于 180° 中心对称，360-x 仍落在 [60, 300]。
                 float send_tgt_L = 360.0f - filter_target_R;
                 float send_tgt_R = 360.0f - filter_target_L;
-                while (send_tgt_L < 0.0f)    send_tgt_L += 360.0f;
-                while (send_tgt_L >= 360.0f) send_tgt_L -= 360.0f;
-                while (send_tgt_R < 0.0f)    send_tgt_R += 360.0f;
-                while (send_tgt_R >= 360.0f) send_tgt_R -= 360.0f;
+                // 安全夹制（双保险，浮点误差不会越界）
+                if (send_tgt_L < 60.0f)  send_tgt_L = 60.0f;
+                if (send_tgt_L > 300.0f) send_tgt_L = 300.0f;
+                if (send_tgt_R < 60.0f)  send_tgt_R = 60.0f;
+                if (send_tgt_R > 300.0f) send_tgt_R = 300.0f;
                 steering_control_set_target(send_tgt_L, send_tgt_R);
+
+                // 取出 PID 实际跟踪的目标角（编码器系，与 cur_steer_* 同参考系）
+                // ⚠ 不能直接用 send_tgt_R 做门控判据：steering_control_set_target() 内部
+                //   对右侧做了 360- 翻转（历史遗留，与本文件 send_tgt_R 的镜像运算"双重抵消"
+                //   后 PID 才能让右舵机走到正确位置）。直接用 send_tgt_R 会让右侧 |err|≈180°，
+                //   门控被锁死在 R_FLOOR，PWM 永远只到 1/3。
+                float pid_tgt_L, pid_tgt_R;
+                steering_control_get_target(&pid_tgt_L, &pid_tgt_R);
 
                 // 7. 推力下发——两侧均不反转（电机一律 PWM > 1500），方向完全由舵机决定
                 //
-                // 【舵机就位率门控】方案 A：上升非对称限速，下降不门控
-                //   r = max(0, 1 - |Δθ|/θ_tol)  ∈ [0,1]
+                // 【舵机就位率门控】方案 A 改进版：上升非对称限速，下降不门控
+                //   r = R_FLOOR + (1-R_FLOOR) * max(0, 1 - |Δθ|/θ_tol)   ∈ [R_FLOOR, 1]
                 //   T_out = T_prev + r * (T_cmd - T_prev)   (仅当 T_cmd > T_prev)
                 //   T_out = T_cmd                            (T_cmd <= T_prev 直通)
-                //   左右独立计算。物理左舵机 ↔ 物理左电机（接收 T_R_target，因为 L/R 已互换）
+                //
+                // 【为什么需要 R_FLOOR > 0】
+                //   舵机追大转角（如 180→270）期间 |err| 会持续 >SERVO_TOL_DEG，
+                //   纯 r=0 会让 last_thrust_motor 永久卡死在初值（实测 PWM 卡 1523 ≈ 1/3 推力），
+                //   永远等不到舵机就位。给一个最小爬升率 R_FLOOR=0.08，保证即使大 err
+                //   也能以 ~10 帧 (100ms) 爬到目标的一半，3-5 个 100Hz 周期就能跟上 30% 油门。
+                //
+                //   左右独立计算后取 min（对称门控，避免左右推力不等导致 yaw）
                 //   注：last_thrust_motor_L/R 已提到 control_core_task 函数顶部声明
-                const float SERVO_TOL_DEG = 15.0f;
+                const float SERVO_TOL_DEG = 30.0f;
+                const float R_FLOOR = 0.08f;
 
-                // 物理左侧：目标角 send_tgt_L，实际 cur_steer_left；门控 T_R_target（送给物理左电机）
-                float err_servo_L = send_tgt_L - cur_steer_left;
+                // 物理左侧：用 PID 实际目标 pid_tgt_L 与编码器读数 cur_steer_left 比对
+                float err_servo_L = pid_tgt_L - cur_steer_left;
                 while (err_servo_L >  180.0f) err_servo_L -= 360.0f;
                 while (err_servo_L < -180.0f) err_servo_L += 360.0f;
-                float r_L = 1.0f - fabsf(err_servo_L) / SERVO_TOL_DEG;
-                if (r_L < 0.0f) r_L = 0.0f;
-                if (r_L > 1.0f) r_L = 1.0f;
+                float r_L_raw = 1.0f - fabsf(err_servo_L) / SERVO_TOL_DEG;
+                if (r_L_raw < 0.0f) r_L_raw = 0.0f;
+                if (r_L_raw > 1.0f) r_L_raw = 1.0f;
+                float r_L = R_FLOOR + (1.0f - R_FLOOR) * r_L_raw;
 
-                // 物理右侧：目标角 send_tgt_R，实际 cur_steer_right；门控 T_L_target（送给物理右电机）
-                // ⚠ 右侧编码器与右侧目标角是镜像参考系（cur=90 物理上等同 send=270），
-                //   先把 cur 镜像到与 send_tgt_R 同一参考系再算 err，否则 |err| 永远~180°，r_R≈0。
-                float cur_steer_right_mirrored = 360.0f - cur_steer_right;
-                while (cur_steer_right_mirrored < 0.0f)    cur_steer_right_mirrored += 360.0f;
-                while (cur_steer_right_mirrored >= 360.0f) cur_steer_right_mirrored -= 360.0f;
-                float err_servo_R = send_tgt_R - cur_steer_right_mirrored;
+                // 物理右侧：用 PID 实际目标 pid_tgt_R（已含内部 360- 翻转）与 cur_steer_right 比对
+                float err_servo_R = pid_tgt_R - cur_steer_right;
                 while (err_servo_R >  180.0f) err_servo_R -= 360.0f;
                 while (err_servo_R < -180.0f) err_servo_R += 360.0f;
-                float r_R = 1.0f - fabsf(err_servo_R) / SERVO_TOL_DEG;
-                if (r_R < 0.0f) r_R = 0.0f;
-                if (r_R > 1.0f) r_R = 1.0f;
+                float r_R_raw = 1.0f - fabsf(err_servo_R) / SERVO_TOL_DEG;
+                if (r_R_raw < 0.0f) r_R_raw = 0.0f;
+                if (r_R_raw > 1.0f) r_R_raw = 1.0f;
+                float r_R = R_FLOOR + (1.0f - R_FLOOR) * r_R_raw;
 
                 // ===== 对称门控 =====
                 // Scheme A 本意：按"最慢就位的一侧"统一限速，保证左右推力上升对称。
@@ -432,6 +467,19 @@ void control_core_task(void *pvParameters) {
             enc_fault_warn_time = xTaskGetTickCount();
         }
 
+        // ====== 编码器失效硬保护 ======
+        // 任意一侧编码器掉线 → 立即把所有 4 路 PWM 全部锁回 1500us（舵机停转 + 大电机停转）。
+        // 比 steering_control_update() 内部的"PID 不输出"更彻底——直接覆盖本拍的推力下发，
+        // 避免大电机带桨的同时舵机失控乱转。同时清零 Scheme A 历史，避免恢复瞬间跳变。
+        if (enc_left_fault || enc_right_fault) {
+            motor_control_set_pwm_bidirectional(0.0f, 0.0f, false, false);  // 大电机 → 1500
+            motor_control_set_steering_pwm(1500, 1500);                      // 舵机 → 1500
+            last_thrust_motor_L = 0.0f;
+            last_thrust_motor_R = 0.0f;
+            // 注意：steering_control_update() 仍会被调用，但其内部对失效侧也会输出 1500，
+            // 不会覆盖我们刚才的设置（PID 静音 + 中立 PWM）。
+        }
+
         // 统一更新小电机位置 (下发滤波后的 PWM)
         steering_control_update(); 
 
@@ -441,18 +489,14 @@ void control_core_task(void *pvParameters) {
             // 获取实际下发的 PWM 脉宽
             uint32_t actual_pwm_L, actual_pwm_R;
             motor_control_get_last_pwm(&actual_pwm_L, &actual_pwm_R);
-            
-            // 转换到与编码器一致的"物理角"坐标显示，方便对比
-            // (steering_control_set_target 内部对两侧都做了 360 - x 翻转)
-            float disp_tgt_L = filter_target_L;
-            float disp_tgt_R = filter_target_R;
-            while (disp_tgt_L < 0.0f)    disp_tgt_L += 360.0f;
-            while (disp_tgt_L >= 360.0f) disp_tgt_L -= 360.0f;
-            while (disp_tgt_R < 0.0f)    disp_tgt_R += 360.0f;
-            while (disp_tgt_R >= 360.0f) disp_tgt_R -= 360.0f;
 
-            printf("Fwd:%.1f%% | TgtL:%.1f (Act:%.1f) | TgtR:%.1f (Act:%.1f) | Roll:%.2f | PWM_L:%u PWM_R:%u | Tau:%.0f dV:%.0f | Enc:%s/%s\n", 
-                   g_forward_thrust, disp_tgt_L, cur_steer_left, disp_tgt_R, cur_steer_right, 
+            // 显示用的 Tgt = 真实下发给 PID 的目标角（编码器系），
+            // 与 Act（编码器读数）同参考系，收敛后两者一致。
+            float disp_tgt_L, disp_tgt_R;
+            steering_control_get_target(&disp_tgt_L, &disp_tgt_R);
+
+            printf("Fwd:%.1f%% | TgtL:%.1f (Act:%.1f) | TgtR:%.1f (Act:%.1f) | Roll:%.2f | PWM_L:%u PWM_R:%u | Tau:%.0f dV:%.0f | Enc:%s/%s\n",
+                   g_forward_thrust, disp_tgt_L, cur_steer_left, disp_tgt_R, cur_steer_right,
                    state.roll_deg, actual_pwm_L, actual_pwm_R, last_tau_total, last_V_balance,
                    enc_left_fault ? "X" : "✓", enc_right_fault ? "X" : "✓");
             print_cnt = 0;

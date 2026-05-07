@@ -38,6 +38,11 @@ static float offset_right = 0.0f;
 // 编码器滤波缓存（简单直通）
 static float filtered_angle_left = 180.0f;
 static float filtered_angle_right = 180.0f;
+// 首次播种标志：true 时野值过滤暂停，第一拍合法读数直接覆盖 filtered_angle_*。
+// 解决开机时舵机不在 180° 也被卡死显示 180° 的问题（diff>40° 永远被野值剔除）。
+// 校准 / NVS 加载后会重置为 false，触发重新播种。
+static bool filtered_left_seeded  = false;
+static bool filtered_right_seeded = false;
 
 // 是否已经完成"竖直 → 180°"校准（NVS 加载成功 或 用户手动触发过）
 static bool s_calibrated = false;
@@ -156,8 +161,10 @@ void steering_control_init(void) {
     if (nvs_load_offsets(&loaded_l, &loaded_r) == ESP_OK) {
         offset_left  = loaded_l;
         offset_right = loaded_r;
-        filtered_angle_left  = 180.0f;
+        filtered_angle_left  = 180.0f;  // 临时占位，首拍 get_current_angles() 会用真实读数覆盖
         filtered_angle_right = 180.0f;
+        filtered_left_seeded  = false;  // 强制首拍播种
+        filtered_right_seeded = false;
         s_calibrated = true;
         ESP_LOGI(TAG, "✓ 已从 NVS 加载校准: offset_L=%.2f° offset_R=%.2f°", offset_left, offset_right);
     } else {
@@ -168,10 +175,18 @@ void steering_control_init(void) {
 }
 
 void steering_control_set_target(float target_left_deg, float target_right_deg) {
-    target_left = target_left_deg;
-    target_right = 360-target_right_deg;
+    // 注意：右侧做了 360- 翻转，这是历史遗留——与 main.c 中
+    //   send_tgt_R = 360 - filter_target_L
+    // 的镜像"双重抵消"后，PID 才能让右舵机走到正确位置。
+    // 任何调用者都要意识到：写入的 R 值与读出的 R 值 (get_target) 不是同一帧。
+    // 门控判据必须使用 get_target() 的返回值，而不是写入的原始 send_tgt_R。
+    target_left  = target_left_deg;
+    target_right = 360.0f - target_right_deg;
 }
-
+void steering_control_get_target(float *left_deg, float *right_deg) {
+    if (left_deg)  *left_deg  = target_left;
+    if (right_deg) *right_deg = target_right;
+}
 void steering_control_calibrate_and_save(void) {
     // 读取当前编码器的竖直状态值作为校准基准
     float cal_left  = compute_angle(enc_left.high_us,  enc_left.period_us,  enc_left.valid);
@@ -181,9 +196,11 @@ void steering_control_calibrate_and_save(void) {
     offset_left  = cal_left  - 180.0f;
     offset_right = cal_right - 180.0f;
 
-    // 初始化滤波缓存
+    // 初始化滤波缓存（校准刚完成，舵机一定在 180° 物理位）
     filtered_angle_left  = 180.0f;
     filtered_angle_right = 180.0f;
+    filtered_left_seeded  = true;
+    filtered_right_seeded = true;
 
     s_calibrated = true;
     ESP_LOGI(TAG, "Encoder Calibration Complete. Offset Left: %.2f°, Offset Right: %.2f°", offset_left, offset_right);
@@ -231,34 +248,45 @@ void steering_control_get_current_angles(float *left_deg, float *right_deg) {
 
     // 左
     {
-        float prev = filtered_angle_left;
-        float d = raw_left - prev;
-        while (d >  180.0f) d -= 360.0f;
-        while (d < -180.0f) d += 360.0f;
-        if (!enc_left.valid || fabsf(d) > OUTLIER_DEG) {
-            raw_left = prev;   // 保留上一拍
+        if (enc_left.valid && !filtered_left_seeded) {
+            // 首次播种：跳过野值剔除，直接吃当前 raw 读数为初值
+            filtered_angle_left = raw_left;
+            filtered_left_seeded = true;
         } else {
-            float upd = prev + LPF_ALPHA * d;
-            while (upd < 0.0f)    upd += 360.0f;
-            while (upd >= 360.0f) upd -= 360.0f;
-            filtered_angle_left = upd;
-            raw_left = upd;
+            float prev = filtered_angle_left;
+            float d = raw_left - prev;
+            while (d >  180.0f) d -= 360.0f;
+            while (d < -180.0f) d += 360.0f;
+            if (!enc_left.valid || fabsf(d) > OUTLIER_DEG) {
+                raw_left = prev;   // 保留上一拍
+            } else {
+                float upd = prev + LPF_ALPHA * d;
+                while (upd < 0.0f)    upd += 360.0f;
+                while (upd >= 360.0f) upd -= 360.0f;
+                filtered_angle_left = upd;
+                raw_left = upd;
+            }
         }
     }
     // 右
     {
-        float prev = filtered_angle_right;
-        float d = raw_right - prev;
-        while (d >  180.0f) d -= 360.0f;
-        while (d < -180.0f) d += 360.0f;
-        if (!enc_right.valid || fabsf(d) > OUTLIER_DEG) {
-            raw_right = prev;
+        if (enc_right.valid && !filtered_right_seeded) {
+            filtered_angle_right = raw_right;
+            filtered_right_seeded = true;
         } else {
-            float upd = prev + LPF_ALPHA * d;
-            while (upd < 0.0f)    upd += 360.0f;
-            while (upd >= 360.0f) upd -= 360.0f;
-            filtered_angle_right = upd;
-            raw_right = upd;
+            float prev = filtered_angle_right;
+            float d = raw_right - prev;
+            while (d >  180.0f) d -= 360.0f;
+            while (d < -180.0f) d += 360.0f;
+            if (!enc_right.valid || fabsf(d) > OUTLIER_DEG) {
+                raw_right = prev;
+            } else {
+                float upd = prev + LPF_ALPHA * d;
+                while (upd < 0.0f)    upd += 360.0f;
+                while (upd >= 360.0f) upd -= 360.0f;
+                filtered_angle_right = upd;
+                raw_right = upd;
+            }
         }
     }
 
@@ -341,6 +369,14 @@ void steering_control_update(void) {
     float cur_left, cur_right;
     steering_control_get_current_angles(&cur_left, &cur_right);
 
+    // 【编码器失效保护】
+    // get_current_angles 在 invalid 时只是"冻结上一拍滤波值"，PID 自己感知不到失效。
+    // 若不在这里拦截，PID 会按冻结的角度持续喷 PWM，360° 连续舵机会
+    // 一路狂转过冲一整圈（实测 270→90 多走 360° = 540°）。
+    // 失效时直接 PWM=1500（舵机不转），同时复位该侧 PID 状态，避免恢复后积分爆发。
+    bool enc_l_ok = enc_left.valid;
+    bool enc_r_ok = enc_right.valid;
+
     float err_L = shortest_angle_error(target_left, cur_left);
     float err_R = shortest_angle_error(target_right, cur_right);
 
@@ -349,14 +385,25 @@ void steering_control_update(void) {
 
 #if STEERING_CONTROL_MODE == STEERING_MODE_PID
     // PID 模式
-    if (fabsf(err_L) > DEADZONE) {
+    if (!enc_l_ok) {
+        // 编码器失效：停转 + 清状态，等编码器恢复
+        adjust_L = 0.0f;
+        integral_left = 0.0f;
+        prev_err_left = 0.0f;
+        out_filt_left = 0.0f;
+    } else if (fabsf(err_L) > DEADZONE) {
         adjust_L = calculate_pid(err_L, &integral_left, &prev_err_left, &out_filt_left);
     } else {
         adjust_L = 0.0f;
         integral_left = 0.0f;
     }
-    
-    if (fabsf(err_R) > DEADZONE) {
+
+    if (!enc_r_ok) {
+        adjust_R = 0.0f;
+        integral_right = 0.0f;
+        prev_err_right = 0.0f;
+        out_filt_right = 0.0f;
+    } else if (fabsf(err_R) > DEADZONE) {
         adjust_R = calculate_pid(err_R, &integral_right, &prev_err_right, &out_filt_right);
     } else {
         adjust_R = 0.0f;
@@ -364,15 +411,15 @@ void steering_control_update(void) {
     }
 #else
     // 直接映射模式（中等响应速度）
-    if (fabsf(err_L) > DEADZONE) {
+    if (enc_l_ok && fabsf(err_L) > DEADZONE) {
         // 降低比例增益与最大转速限幅
         // PWM 范围限制在 1500 ± 150 (即 1200 到 1800)
         adjust_L = err_L * 5.0f; 
         if (adjust_L > 100.0f) adjust_L = 100.0f;
         if (adjust_L < -100.0f) adjust_L = -100.0f;
     }
-    
-    if (fabsf(err_R) > DEADZONE) {
+
+    if (enc_r_ok && fabsf(err_R) > DEADZONE) {
         adjust_R = err_R * 5.0f;
         if (adjust_R > 100.0f) adjust_R = 100.0f;
         if (adjust_R < -100.0f) adjust_R = -100.0f;

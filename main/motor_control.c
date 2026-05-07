@@ -97,34 +97,33 @@ void motor_control_init(void) {
     
     vTaskDelay(pdMS_TO_TICKS(50));
     
-    // 4. 小电机校准信号：高点 -> 低点 -> 中立（不旋转）
-    ESP_LOGI(TAG, "Calibration sequence for steering servo...");
-    
-    // 高点信号 (2000 us)
+    // 4. 360° 连续舵机上电序列：2000us(50ms) → 1000us(50ms) → 1500us 中立 (1.5s 锁定)
+    //    前两个脉冲用于唤醒/复位舵机内部 MCU（一些 360° 连续舵机首次上电
+    //    若直接喂中立信号，会停在"未定义状态"，必须先送一组高/低脉冲才能正常进入伺服模式）。
+    //    最后 1500us 至少保持 1.5s（≥75 个 50Hz PWM 周期），让舵机锁定为"零速"中立位。
     uint32_t duty_max = us_to_duty(2000);
+    uint32_t duty_min = us_to_duty(1000);
+
+    ESP_LOGI(TAG, "Servo init pulse: 2000us for 50ms...");
     ledc_set_duty(LEDC_MODE, STEER_LEFT_CHANNEL, duty_max);
     ledc_update_duty(LEDC_MODE, STEER_LEFT_CHANNEL);
     ledc_set_duty(LEDC_MODE, STEER_RIGHT_CHANNEL, duty_max);
     ledc_update_duty(LEDC_MODE, STEER_RIGHT_CHANNEL);
-    ESP_LOGI(TAG, "Sent MAX signal (2000us) for 500ms");
-    vTaskDelay(pdMS_TO_TICKS(5));
-    
-    // 低点信号 (1000 us)
-    uint32_t duty_min = us_to_duty(1000);
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    ESP_LOGI(TAG, "Servo init pulse: 1000us for 50ms...");
     ledc_set_duty(LEDC_MODE, STEER_LEFT_CHANNEL, duty_min);
     ledc_update_duty(LEDC_MODE, STEER_LEFT_CHANNEL);
     ledc_set_duty(LEDC_MODE, STEER_RIGHT_CHANNEL, duty_min);
     ledc_update_duty(LEDC_MODE, STEER_RIGHT_CHANNEL);
-    ESP_LOGI(TAG, "Sent MIN signal (1000us) for 500ms");
-    vTaskDelay(pdMS_TO_TICKS(5));
-    
-    // 回到中立位置
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    ESP_LOGI(TAG, "Servo neutral hold (1500us, 1.5s) for power-on lock-in...");
     ledc_set_duty(LEDC_MODE, STEER_LEFT_CHANNEL, duty_neutral);
     ledc_update_duty(LEDC_MODE, STEER_LEFT_CHANNEL);
     ledc_set_duty(LEDC_MODE, STEER_RIGHT_CHANNEL, duty_neutral);
     ledc_update_duty(LEDC_MODE, STEER_RIGHT_CHANNEL);
-    ESP_LOGI(TAG, "Returned to NEUTRAL (1500us)");
-    vTaskDelay(pdMS_TO_TICKS(500));
+    vTaskDelay(pdMS_TO_TICKS(1500));
     
     ESP_LOGI(TAG, "=== Motor Control Initialized Successfully! ===");
 }
