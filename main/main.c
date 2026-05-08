@@ -20,11 +20,20 @@ static const char *TAG = "MAIN";
 // 键盘控制的全局目标推力（前进为正，-100 到 100）——跨文件可访问
 volatile float g_forward_thrust = 0.0f;
 
+// 差速转向状态：-1=左转，0=直行，+1=右转
+// 由 Blinker 三按钮 tap 事件覆盖式设置（每次 tap 直接覆写）；
+// 仅在 |g_forward_thrust| > TURN_MIN_FWD_PCT 时生效，否则被强制归零。
+volatile int g_turn_state = 0;
+
 // 供 Blinker 上报使用：由 control_core_task 每 10ms 刷新
 volatile float g_last_roll_deg = 0.0f;
 
 // 急停标志：true = 强制停止控制循环（电机停 / 舵机回正），false = 正常运行
 volatile bool g_estop_active = false;
+
+// 硬急停标志：true = 丢开所有控制逻辑，直接把 4 个通道都压到 1500us
+//   与 g_estop_active 的区别：后者仍会跟 180° 舵机目标 (连续舵 1500us 才是"不转")。
+volatile bool g_hard_estop = false;
 
 // IMU 专用测试任务 (100Hz)
 void imu_test_task(void *pvParameters) {
@@ -143,7 +152,15 @@ void control_core_task(void *pvParameters) {
     static float last_V_balance = 0.0f;
 
     while (1) {
-        // ====== 急停检查（最高优先级，遥控触发） ======
+        // ====== 硬急停（最高优先级，直接压 4 路 PWM = 1500us）======
+        if (g_hard_estop) {
+            motor_control_emergency_stop();          // 两个 ESC
+            motor_control_set_steering_pwm(1500, 1500); // 两个舵机
+            vTaskDelayUntil(&xLastWakeTime, xFrequency);
+            continue;
+        }
+
+        // ====== 急停检查（高优先级，遥控触发）======
         if (g_estop_active) {
             // 仍然刷新 roll 显示，方便 App 端观察姿态
             if (imu_driver_read(&imu_data) == ESP_OK) {
@@ -278,12 +295,30 @@ void control_core_task(void *pvParameters) {
                 //    特别注意：dV=0 且 H=0 时 V_L = -0.0f，atan2(0,-0) = π，会让左舵机跑到 0°；
                 //    所以这里显式处理"零矢量"情形，保持 180° 中立。
                 //
-                // ===== 方案 C：H 自动降级以满足舵机角度限制 =====
+                // ===== 差速转向：左右水平分量取不等值 =====
+                // 仅在 |g_forward_thrust| > TURN_MIN_FWD_PCT 且 g_turn_state ≠ 0 时生效。
+                // 物理映射注意：本文件后续把 L/R 整组互换下发（send_tgt_L = 360 - filter_target_R），
+                // 因此 H_L / H_R 这里指的是"算法系"的左右，与物理桨的对应关系会在 L/R 互换中处理；
+                // 经实测验证：g_turn_state=+1 (右转按钮) 时 H_L > H_R → 算法左侧推力大 →
+                // 互换后物理右侧电机推力大 → 船头向左偏 ⇒ 与按钮语义反了。
+                // 因此这里把 turn_dir 取反，保证按钮上的"右"就是物理船的"右转"。
+                float H_L = H_thrust;
+                float H_R = H_thrust;
+                int turn_dir = 0;
+                if (fabsf(g_forward_thrust) > TURN_MIN_FWD_PCT) {
+                    turn_dir = -g_turn_state;  // 取反以匹配物理 L/R 互换后的转向语义
+                }
+                if (turn_dir != 0) {
+                    float dH = (float)turn_dir * (TURN_DELTA_H * 0.5f);
+                    H_L = H_thrust + dH;
+                    H_R = H_thrust - dH;
+                }
+
+                // ===== 方案 C：H 自动降级以满足舵机角度限制（左右独立） =====
                 // 舵机发送范围（编码器系）[60°, 300°] 反推到算法系为 target_angle ∈ [60°, 300°]；
                 // target_angle = 180 ± phi ∈ [60, 300] ⇒ |phi| ≤ 120°。
                 // 当 V_i < 0 且 |H/V_i| > tan(60°)=√3 时，|phi| 会超过 120°。
-                // 为保证左右水平分量对称（不 yaw）+ 平衡力矩保留，
-                // 取 H_eff = sign(H) * min(|H|, √3*|V_L|, √3*|V_R|)（V_i<0 才限制）。
+                // 差速后两侧 H 不同，必须分别钳制 H_L_eff、H_R_eff。
                 //
                 // 【V 死区】只有 V_i 显著为负（< -V_DEAD）才触发限制。
                 // 否则微小的 dV 噪声（如 ±0.5）会让 H_max 跌到接近 0，瞬间杀掉前进推力，
@@ -291,34 +326,36 @@ void control_core_task(void *pvParameters) {
                 // V_DEAD=10 对应 ~6.5% 推力等量级，远高于平衡环路噪声。
                 const float TAN60 = 1.7320508f;
                 const float V_DEAD = 10.0f;
-                float H_max = 1.0e9f;  // 初始不限
+
+                float H_L_eff = H_L;
                 if (V_L < -V_DEAD) {
                     float lim = TAN60 * fabsf(V_L);
-                    if (lim < H_max) H_max = lim;
+                    if (H_L_eff >  lim) H_L_eff =  lim;
+                    if (H_L_eff < -lim) H_L_eff = -lim;
                 }
+
+                float H_R_eff = H_R;
                 if (V_R < -V_DEAD) {
                     float lim = TAN60 * fabsf(V_R);
-                    if (lim < H_max) H_max = lim;
+                    if (H_R_eff >  lim) H_R_eff =  lim;
+                    if (H_R_eff < -lim) H_R_eff = -lim;
                 }
-                float H_eff = H_thrust;
-                if (H_eff >  H_max) H_eff =  H_max;
-                if (H_eff < -H_max) H_eff = -H_max;
 
                 const float ZERO_EPS = 1e-3f;
                 float phi_R_deg, phi_L_deg;
-                if (fabsf(V_R) < ZERO_EPS && fabsf(H_eff) < ZERO_EPS) {
+                if (fabsf(V_R) < ZERO_EPS && fabsf(H_R_eff) < ZERO_EPS) {
                     phi_R_deg = 0.0f;
                 } else {
-                    phi_R_deg = atan2f(H_eff, V_R) * 180.0f / (float)M_PI;
+                    phi_R_deg = atan2f(H_R_eff, V_R) * 180.0f / (float)M_PI;
                 }
-                if (fabsf(V_L) < ZERO_EPS && fabsf(H_eff) < ZERO_EPS) {
+                if (fabsf(V_L) < ZERO_EPS && fabsf(H_L_eff) < ZERO_EPS) {
                     phi_L_deg = 0.0f;
                 } else {
-                    phi_L_deg = atan2f(H_eff, V_L) * 180.0f / (float)M_PI;
+                    phi_L_deg = atan2f(H_L_eff, V_L) * 180.0f / (float)M_PI;
                 }
 
-                float T_R_target = sqrtf(V_R * V_R + H_eff * H_eff);
-                float T_L_target = sqrtf(V_L * V_L + H_eff * H_eff);
+                float T_R_target = sqrtf(V_R * V_R + H_R_eff * H_R_eff);
+                float T_L_target = sqrtf(V_L * V_L + H_L_eff * H_L_eff);
 
                 // 5. 映射到舵机物理角度（左右镜像，左 +、右 −）
                 //    由于方案 C 已保证 |phi| ≤ 120°，target_angle 一定 ∈ [60°, 300°]。
