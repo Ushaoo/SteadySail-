@@ -405,16 +405,6 @@ static float calculate_pid(float error, float *integral, float *prev_error, floa
     // P 项
     float p_out = kp * err_smooth;
 
-    // I 项
-    float i_candidate = *integral + err_smooth * dt * ki;
-    if (i_candidate > integral_max) {
-        i_candidate = integral_max;
-    } else if (i_candidate < -integral_max) {
-        i_candidate = -integral_max;
-    }
-    *integral = i_candidate;
-    float i_out = *integral;
-
     // D 项
     float derivative = 0.0f;
     if (dt > 0) {
@@ -425,12 +415,23 @@ static float calculate_pid(float error, float *integral, float *prev_error, floa
     *prev_error = error;
     float d_out = kd * derivative;
 
-    float raw_out = p_out + i_out + d_out;
+    // I 项（带 anti-windup：仅在输出未饱和时才累积积分）
+    // 避免大误差旋转段积分饱和 → 到达终点时积分爆冲导致振荡
+    float pd_out = p_out + d_out;
+    float i_candidate = *integral + err_smooth * dt * ki;
+    if (i_candidate > integral_max) i_candidate = integral_max;
+    if (i_candidate < -integral_max) i_candidate = -integral_max;
+    // 只有 PD 输出本身未饱和时才允许积分朝同方向增长（back-calculation anti-windup）
+    if (!((pd_out >= 500.0f && i_candidate > *integral) ||
+          (pd_out <= -500.0f && i_candidate < *integral))) {
+        *integral = i_candidate;
+    }
+    float i_out = *integral;
+
+    float raw_out = pd_out + i_out;
 
     // 低通滤波（仅平滑 D 项高频噪声，不应大幅限制 P 项响应速度）
-    // 原 0.12f → τ≈125ms，截止~1.3Hz，过度压慢了整体响应。
-    // 改为 0.03f → τ≈30ms，截止~5.3Hz，与大电机推力滤波器一致。
-    // 如果振荡，可尝试 0.05f（τ≈50ms）作为中间值。
+    // τ=0.03f → 截止~5.3Hz @ 100Hz
     float alpha = dt / (0.03f + dt);
     *out_filt = *out_filt + alpha * (raw_out - *out_filt);
 
@@ -503,6 +504,7 @@ void steering_control_update(void) {
     } else {
         adjust_L = 0.0f;
         integral_left = 0.0f;
+        out_filt_left = 0.0f;  // 清 LPF 残值，避免重新进入 PID 时启动抖动
     }
 
     if (!enc_r_ok) {
@@ -515,6 +517,7 @@ void steering_control_update(void) {
     } else {
         adjust_R = 0.0f;
         integral_right = 0.0f;
+        out_filt_right = 0.0f;  // 清 LPF 残值，避免重新进入 PID 时启动抖动
     }
 #else
     // 直接映射模式（中等响应速度）
