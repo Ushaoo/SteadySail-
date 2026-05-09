@@ -473,8 +473,19 @@ void steering_control_update(void) {
     bool enc_l_ok = enc_left.valid;
     bool enc_r_ok = enc_right.valid;
 
-    float err_L = shortest_angle_error(target_left, cur_left);
-    float err_R = shortest_angle_error(target_right, cur_right);
+    // 线性误差（不做 ±180° 环形折叠），确保舵机始终沿 [80°, 280°] 弧内运动。
+    // 若用 shortest_angle_error：当 target 与 cur 相距 >180°（如 82° vs 278°），
+    // 会选择经 0° 的 160° 短路径，驱动舵机穿越禁区。
+    // 线性减法：误差最大 ±200°（弧宽），方向始终沿弧，绝不经过 0°/360°。
+    float tgt_L = target_left;
+    if (tgt_L < 80.0f) tgt_L = 80.0f;
+    if (tgt_L > 280.0f) tgt_L = 280.0f;
+    float tgt_R = target_right;
+    if (tgt_R < 80.0f) tgt_R = 80.0f;
+    if (tgt_R > 280.0f) tgt_R = 280.0f;
+
+    float err_L = tgt_L - cur_left;
+    float err_R = tgt_R - cur_right;
 
     const float DEADZONE = 3.0f;
     float adjust_L = 0.0f, adjust_R = 0.0f;

@@ -3,6 +3,7 @@
 #include "steering_control.h"
 #include "motor_control.h"
 #include "system_config.h"
+#include "bno055_driver.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -25,6 +26,8 @@ extern volatile bool  g_estop_active;
 extern volatile bool  g_hard_estop;       // 硬急停：所有通道直接 1500us
 extern volatile float g_demo_roll_deg;   // DEMO_MANUAL_ROLL 手动横滚角输入
 extern volatile int   g_turn_state;       // 差速转向状态：-1=左/0=直/+1=右
+extern volatile bool  g_heading_hold_active; // 航向保持开关（BNO055）
+extern volatile float g_target_heading;      // 目标偏航角（0~360°）
 
 // ============================================================
 // 控件键名（与 Blinker App 面板上的控件键名一致）
@@ -74,8 +77,8 @@ extern volatile int   g_turn_state;       // 差速转向状态：-1=左/0=直/+
 static void on_thrust_slider(const blinker_widget_param_val_t *val)
 {
     float v = (float)val->i;
-    if (v > 100.0f) v = 100.0f;
-    if (v < -100.0f) v = -100.0f;
+    if (v > 50.0f) v = 50.0f;
+    if (v < -50.0f) v = -50.0f;
     g_forward_thrust = v;
     ESP_LOGI(TAG, "[App] 推力滑块: %.1f%%", v);
 }
@@ -155,8 +158,8 @@ static bool try_parse_and_apply_pid(const char *raw)
             const char *q = p + 1;
             while (*q == ' ' || *q == '=' || *q == ':' || *q == '\t') q++;
             if (sscanf(q, "%f", &v) == 1) {
-                if (v >  100.0f) v =  100.0f;
-                if (v < -100.0f) v = -100.0f;
+                if (v >  50.0f) v =  50.0f;
+                if (v < -50.0f) v = -50.0f;
                 g_forward_thrust = v;
                 ESP_LOGI(TAG, "[App] 前进推力更新: f = %.1f %%", v);
                 any_updated = true;
@@ -300,20 +303,34 @@ static void on_estop(const blinker_widget_param_val_t *val)
 static void on_turn_left(const blinker_widget_param_val_t *val)
 {
     (void)val;
+    g_heading_hold_active = false;  // 退出航向保持，恢复手动差速
     g_turn_state = -1;
-    ESP_LOGI(TAG, "[App] 转向 -> 左");
+    ESP_LOGI(TAG, "[App] 转向 -> 左（退出航向保持）");
 }
 static void on_turn_forward(const blinker_widget_param_val_t *val)
 {
     (void)val;
-    g_turn_state = 0;
-    ESP_LOGI(TAG, "[App] 转向 -> 直行（取消）");
+    // 读取 BNO055 当前偏航角作为锁定目标，激活航向保持
+    float current_heading = 0.0f;
+    esp_err_t err = bno055_get_heading(&current_heading);
+    if (err == ESP_OK) {
+        g_target_heading     = current_heading;
+        g_heading_hold_active = true;
+        g_turn_state          = 0;
+        ESP_LOGI(TAG, "[App] 航向保持激活，锁定偏航角 = %.1f°", current_heading);
+    } else {
+        // BNO055 读取失败：退回普通直行，不激活航向保持
+        g_heading_hold_active = false;
+        g_turn_state          = 0;
+        ESP_LOGW(TAG, "[App] BNO055 读取失败，退回普通直行");
+    }
 }
 static void on_turn_right(const blinker_widget_param_val_t *val)
 {
     (void)val;
+    g_heading_hold_active = false;  // 退出航向保持，恢复手动差速
     g_turn_state = +1;
-    ESP_LOGI(TAG, "[App] 转向 -> 右");
+    ESP_LOGI(TAG, "[App] 转向 -> 右（退出航向保持）");
 }
 
 // ============================================================

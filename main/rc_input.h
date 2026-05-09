@@ -1,0 +1,23 @@
+#pragma once
+// rc_input.h — RC 接收机单通道 PWM 输入驱动
+// 用 GPIO 中断 + esp_timer 测量脉宽，适配标准 1000~2000μs RC PWM
+// 用途：将遥感前后轴映射为 g_forward_thrust（-100% ~ +100%）
+
+#include "esp_err.h"
+#include <stdbool.h>
+
+// 初始化：配置 gpio_num 为双边沿中断输入，安装 ISR
+esp_err_t rc_input_init(int gpio_num);
+
+// 获取油门值：-100.0 ~ +100.0（中位死区内返回 0.0）
+// 超过 RC_SIGNAL_TIMEOUT_MS 无信号时返回 0.0（安全归零）
+float rc_input_get_throttle(void);
+
+// 信号有效性：最近 RC_SIGNAL_TIMEOUT_MS 内收到过合法脉冲
+bool rc_input_is_valid(void);
+
+// 是否正处于定速巡航状态（拨杆松手后定速生效）
+bool rc_input_is_cruising(void);
+
+// 外部主动取消定速（如急停、Blinker操作等）
+void rc_input_cancel_cruise(void);

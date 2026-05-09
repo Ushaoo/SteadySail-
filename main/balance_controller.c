@@ -1,6 +1,7 @@
 #include "balance_controller.h"
 #include "system_config.h"
 #include "control_params.h"
+#include "bno055_driver.h"
 #include <math.h>
 #include <stdbool.h>
 
@@ -70,6 +71,113 @@ void balance_controller_init(void) {
 }
 
 void balance_controller_update(dual_imu_data_t *imu_data, balance_state_t *state) {
+#if USE_BNO055_FOR_ROLL
+    // ============================================================
+    // BNO055 路径（替代 MPU6050 + 软件 Mahony 融合）
+    //   imu_data 参数在此路径下未使用（保留接口兼容，MPU 代码完整留存在 #else 分支）
+    // ============================================================
+
+    // 阶段0：启动稳定等待 0.5s（bno055_init 内已等待 1s，这里再额外落地）
+    if (gyro_calibration_counter < 50) {
+        gyro_calibration_counter++;
+        state->roll_deg = 0.0f; state->pitch_deg = 0.0f; state->yaw_deg = 0.0f;
+        state->omega_filtered = 0.0f; state->alpha = 0.0f;
+        state->tau_ff = 0.0f; state->tau_pid = 0.0f; state->tau_total = 0.0f;
+        return;
+    }
+
+    // 阶段1：读取 BNO055 Roll 角与 X 轴角速度
+    float roll_raw = 0.0f, gyrox_raw = 0.0f;
+    if (bno055_get_roll(&roll_raw) != ESP_OK || bno055_get_gyro_x(&gyrox_raw) != ESP_OK) {
+        // 读取失败：保持上一帧输出，不更新 prev_omega_filtered
+        state->roll_deg = 0.0f; state->pitch_deg = 0.0f; state->yaw_deg = 0.0f;
+        state->omega_filtered = 0.0f; state->alpha = 0.0f;
+        state->tau_ff = 0.0f; state->tau_pid = 0.0f; state->tau_total = 0.0f;
+        return;
+    }
+
+    // 阶段1.5：捕捉启动时姿态零点偏移（对 50 帧求均值，抗单帧噪声）
+    if (!attitude_offset_captured) {
+        attitude_settle_cnt++;
+        attitude_offset_roll += roll_raw;  // 累加（init 时已归零）
+        if (attitude_settle_cnt >= 50) {
+            attitude_offset_roll    /= 50.0f;  // 求均值
+            attitude_offset_captured = true;
+            // 注意：使用 ESP_LOGI 需要包含 esp_log.h，balance_controller.c 中已有
+            // 直接用 printf 避免引入额外头文件依赖
+            printf("[BAL] BNO055 零点捕获完成: offset_roll=%.2f°\n", attitude_offset_roll);
+        }
+        state->roll_deg = 0.0f; state->pitch_deg = 0.0f; state->yaw_deg = 0.0f;
+        state->omega_filtered = 0.0f; state->alpha = 0.0f;
+        state->tau_ff = 0.0f; state->tau_pid = 0.0f; state->tau_total = 0.0f;
+        return;
+    }
+
+    // 减去安装零点；反转极性（与 Mahony 路径保持相同的 Roll/omega 正方向约定）
+    float theta = -(roll_raw - attitude_offset_roll);
+    while (theta >  180.0f) theta -= 360.0f;
+    while (theta < -180.0f) theta += 360.0f;
+    state->roll_deg  = theta;
+    state->pitch_deg = 0.0f;
+    state->yaw_deg   = 0.0f;
+
+    float gx_b = -gyrox_raw;  // 同步反转，与 Roll 方向一致
+
+    // EMA 低通滤波 + 角加速度
+    state->omega_filtered = ALPHA_EMA * gx_b + (1.0f - ALPHA_EMA) * prev_omega_filtered;
+    state->alpha = (state->omega_filtered - prev_omega_filtered) / CONTROL_DT;
+    prev_omega_filtered = state->omega_filtered;
+    float omega_b = apply_deadzone_smooth(state->omega_filtered, 3.0f, 6.0f);
+    if (fabsf(state->omega_filtered) > 1e-6f) {
+        state->alpha *= fabsf(omega_b / state->omega_filtered);
+    } else {
+        state->alpha = 0.0f;
+    }
+
+    // 前馈：与 MPU 路径公式完全一致
+    float tau_disturb_b = SYS_MASS * GRAVITY * (SYS_WIDTH / 2.0f) * sinf(theta * (float)M_PI / 180.0f);
+    float tau_self_b    = -K_SELF * theta;
+    state->tau_ff = -tau_disturb_b - INERTIA * state->alpha - tau_self_b;
+    float theta_pred_b = theta + omega_b * 0.05f + 0.5f * state->alpha * 0.0025f;
+    if (fabsf(theta_pred_b) > 0.8f) state->tau_ff *= 1.2f;
+
+    // 2DOF PID
+    float error_b = -theta;  // 目标 0°
+    if (fabsf(theta) < ANGLE_DEADZONE) {
+        pid_integral = 0.0f;
+    } else {
+        pid_integral += error_b * CONTROL_DT;
+        if (pid_integral >  100.0f) pid_integral =  100.0f;
+        if (pid_integral < -100.0f) pid_integral = -100.0f;
+    }
+    state->tau_pid = g_balance_kp * (0.8f * 0.0f - theta)
+                   + g_balance_ki * pid_integral
+                   + g_balance_kd * (0.0f - omega_b);
+
+    // 死区因子（与 MPU 路径逻辑完全一致）
+    float abs_theta_b = fabsf(theta);
+    float af_b;
+    if      (abs_theta_b < ANGLE_DEADZONE)      af_b = 0.0f;
+    else if (abs_theta_b < ANGLE_DEADZONE_SOFT) {
+        float t = (abs_theta_b - ANGLE_DEADZONE) / (ANGLE_DEADZONE_SOFT - ANGLE_DEADZONE);
+        af_b = t * t * (3.0f - 2.0f * t);
+    } else af_b = 1.0f;
+
+    float abs_omega_b = fabsf(omega_b);
+    float of_b;
+    if      (abs_omega_b < 3.0f) of_b = 0.0f;
+    else if (abs_omega_b < 6.0f) {
+        float t = (abs_omega_b - 3.0f) / 3.0f;
+        of_b = t * t * (3.0f - 2.0f * t);
+    } else of_b = 1.0f;
+
+    float df_b = (af_b > of_b) ? af_b : of_b;
+    state->tau_total = (FEEDFORWARD_PARAM * state->tau_ff - FEEDBACK_PARAM * state->tau_pid) * df_b;
+
+#else  // USE_BNO055_FOR_ROLL == 0
+    // ============================================================
+    // MPU6050 + 软件 Mahony 融合路径（保留备用，USE_BNO055_FOR_ROLL=0 时生效）
+    // ============================================================
     // **********************************************
     // 0. 陀螺仪零偏自动校准阶段（启动后2秒内）
     // **********************************************
@@ -313,5 +421,6 @@ void balance_controller_update(dual_imu_data_t *imu_data, balance_state_t *state
     tau_total *= deadzone_factor;
     
     state->tau_total = tau_total;
+#endif  // USE_BNO055_FOR_ROLL
 }
 

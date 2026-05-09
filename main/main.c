@@ -15,6 +15,8 @@
 #include "steering_control.h"
 #include "control_params.h"
 #include "blinker_bridge.h"
+#include "bno055_driver.h"
+#include "rc_input.h"
 
 static const char *TAG = "MAIN";
 
@@ -25,6 +27,13 @@ volatile float g_forward_thrust = 0.0f;
 // 由 Blinker 三按钮 tap 事件覆盖式设置（每次 tap 直接覆写）；
 // 仅在 |g_forward_thrust| > TURN_MIN_FWD_PCT 时生效，否则被强制归零。
 volatile int g_turn_state = 0;
+
+// ====== 航向保持（BNO055 绝对偏航）======
+// g_heading_hold_active = true  : 锁定航向，用 BNO055 偏航误差驱动差速 dH
+// g_heading_hold_active = false : 正常手动差速（g_turn_state 决定方向）
+// g_target_heading              : 锁定时的目标偏航角（0~360°，由 BNO055 当前值捕获）
+volatile bool  g_heading_hold_active = false;
+volatile float g_target_heading      = 0.0f;
 
 // 供 Blinker 上报使用：由 control_core_task 每 10ms 刷新
 volatile float g_last_roll_deg = 0.0f;
@@ -49,6 +58,17 @@ void imu_test_task(void *pvParameters) {
     
     int print_count = 0;
     while (1) {
+#if USE_BNO055_FOR_ROLL
+        // BNO055 模式：imu_test_task 直接通过 balance_controller 读取 BNO055 Roll 角
+        balance_controller_update(&imu_data, &state);
+        if (++print_count >= 10) {
+            printf("\n--- BNO055 融合数据 (100Hz读取, 10Hz显示) ---\n");
+            printf("[BNO055] Roll:%.2f\u00b0 Pitch:%.2f\u00b0 Yaw:%.2f\u00b0 | Tau:%.2f\n",
+                   state.roll_deg, state.pitch_deg, state.yaw_deg, state.tau_total);
+            printf("-----------------------------------\n");
+            print_count = 0;
+        }
+#else
         if (imu_driver_read(&imu_data) == ESP_OK) {
             // 融合得到四元数和欧拉角
             balance_controller_update(&imu_data, &state);
@@ -84,6 +104,7 @@ void imu_test_task(void *pvParameters) {
                 err_count = 0;
             }
         }
+#endif  // USE_BNO055_FOR_ROLL
         
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
@@ -252,15 +273,26 @@ void control_core_task(void *pvParameters) {
         // ====== 急停检查（高优先级，遥控触发）======
         if (g_estop_active) {
             // 仍然刷新 roll 显示，方便 App 端观察姿态
+#if USE_BNO055_FOR_ROLL
+            balance_controller_update(&imu_data, &state);  // BNO055 路径：内部读取
+            g_last_roll_deg = state.roll_deg;
+#else
             if (imu_driver_read(&imu_data) == ESP_OK) {
                 balance_controller_update(&imu_data, &state);
                 g_last_roll_deg = state.roll_deg;
             }
+#endif
             motor_control_emergency_stop();
             steering_control_set_target(180.0f, 180.0f);
             steering_control_update();
             vTaskDelayUntil(&xLastWakeTime, xFrequency);
             continue;
+        }
+
+        // ====== RC 遥感油门：有信号时直接覆写 g_forward_thrust ======
+        // 无 RC 信号时 rc_input_get_throttle() 返回 0.0，Blinker 按钮仍可控制
+        if (rc_input_is_valid()) {
+            g_forward_thrust = rc_input_get_throttle();
         }
 
         // 获取当前的物理真实角度
@@ -311,11 +343,17 @@ void control_core_task(void *pvParameters) {
             imu_ok = true;
         }
 #else
+#if USE_BNO055_FOR_ROLL
+        // BNO055 路径：balance_controller 内部读取传感器，无需 imu_driver_read
+        balance_controller_update(&imu_data, &state);
+        imu_ok = true;
+#else
         if (imu_driver_read(&imu_data) == ESP_OK) {
-            // 算出需要抵抗倾覆的垂直力矩 tau_total
+            // 算出需要抗抗倒覆的垂直力矩 tau_total
             balance_controller_update(&imu_data, &state);
             imu_ok = true;
         }
+#endif
 #endif
 
         if (imu_ok) {
@@ -403,29 +441,67 @@ void control_core_task(void *pvParameters) {
                     H_R = H_thrust - dH;
                 }
 
+                // ===== 航向保持（BNO055 绝对偏航角 PI 控制） =====
+                // turn_f 按下 → g_heading_hold_active=true，g_target_heading=当前偏航。
+                // 此时忽略 g_turn_state，用偏航误差连续调整 dH。
+                // turn_l / turn_r 按下 → g_heading_hold_active=false，退回手动差速。
+                if (g_heading_hold_active && fabsf(g_forward_thrust) > TURN_MIN_FWD_PCT) {
+                    float cur_heading = 0.0f;
+                    if (bno055_get_heading(&cur_heading) == ESP_OK) {
+                        // 偏航误差：取最短路径（±180°）
+                        float yaw_err = g_target_heading - cur_heading;
+                        if (yaw_err >  180.0f) yaw_err -= 360.0f;
+                        if (yaw_err < -180.0f) yaw_err += 360.0f;
+
+                        // PI 控制：积分仅在误差较小时累积，防止大角度偏差积分饱和
+                        static float heading_integral = 0.0f;
+                        const float HEADING_INT_LIMIT = TURN_DELTA_H / HEADING_KI;
+                        if (fabsf(yaw_err) < 30.0f) {
+                            heading_integral += yaw_err * 0.01f;  // dt = 0.01s
+                            if (heading_integral >  HEADING_INT_LIMIT) heading_integral =  HEADING_INT_LIMIT;
+                            if (heading_integral < -HEADING_INT_LIMIT) heading_integral = -HEADING_INT_LIMIT;
+                        } else {
+                            heading_integral = 0.0f;  // 大误差时清积分
+                        }
+
+                        float dH_heading = HEADING_KP * yaw_err + HEADING_KI * heading_integral;
+
+                        // 钳制到差速上限（与手动差速共用 TURN_DELTA_H）
+                        if (dH_heading >  TURN_DELTA_H) dH_heading =  TURN_DELTA_H;
+                        if (dH_heading < -TURN_DELTA_H) dH_heading = -TURN_DELTA_H;
+
+                        // 注意：与手动差速相同的极性约定（turn_dir 取反已内化在此）
+                        // 偏航误差 > 0 → 当前航向偏左 → 需右转 → H_L 增大
+                        H_L = H_thrust + dH_heading;
+                        H_R = H_thrust - dH_heading;
+                    }
+                    // BNO055 读取失败：保持上一帧的 H_L/H_R（已是 H_thrust+dH_heading），
+                    // 下一帧继续尝试。
+                }
+
                 // ===== 方案 C：H 自动降级以满足舵机角度限制（左右独立） =====
-                // 舵机发送范围（编码器系）[60°, 300°] 反推到算法系为 target_angle ∈ [60°, 300°]；
-                // target_angle = 180 ± phi ∈ [60, 300] ⇒ |phi| ≤ 120°。
-                // 当 V_i < 0 且 |H/V_i| > tan(60°)=√3 时，|phi| 会超过 120°。
+                // 舵机允许范围 [80°, 280°]，即 target = 180 ± phi，|phi| ≤ 100°。
+                // 当 V_i < 0 且 H/|V_i| > tan(80°)≈5.67 时 phi < 100°（target 越界），
+                // 将 H 钳制在 TAN80*|V_i|，使 phi 恰好 = 100°，target 落在 280°/80° 边界。
                 // 差速后两侧 H 不同，必须分别钳制 H_L_eff、H_R_eff。
                 //
                 // 【V 死区】只有 V_i 显著为负（< -V_DEAD）才触发限制。
                 // 否则微小的 dV 噪声（如 ±0.5）会让 H_max 跌到接近 0，瞬间杀掉前进推力，
                 // 引发"舵机刚到位 → 推力突然消失 → 卡在 PWM 1500"的现象。
                 // V_DEAD=10 对应 ~6.5% 推力等量级，远高于平衡环路噪声。
-                const float TAN60 = 1.7320508f;
+                const float TAN80 = 5.6712818f;  // tan(80°)，对应 |phi|=100° 边界
                 const float V_DEAD = 10.0f;
 
                 float H_L_eff = H_L;
                 if (V_L < -V_DEAD) {
-                    float lim = TAN60 * fabsf(V_L);
+                    float lim = TAN80 * fabsf(V_L);
                     if (H_L_eff >  lim) H_L_eff =  lim;
                     if (H_L_eff < -lim) H_L_eff = -lim;
                 }
 
                 float H_R_eff = H_R;
                 if (V_R < -V_DEAD) {
-                    float lim = TAN60 * fabsf(V_R);
+                    float lim = TAN80 * fabsf(V_R);
                     if (H_R_eff >  lim) H_R_eff =  lim;
                     if (H_R_eff < -lim) H_R_eff = -lim;
                 }
@@ -447,35 +523,34 @@ void control_core_task(void *pvParameters) {
                 float T_L_target = sqrtf(V_L * V_L + H_L_eff * H_L_eff);
 
                 // 5. 映射到舵机物理角度（左右镜像，左 +、右 −）
-                //    由于方案 C 已保证 |phi| ≤ 120°，target_angle 一定 ∈ [60°, 300°]。
+                //    方案 C + 下方 clamp 共同确保 target_angle ∈ [80°, 280°]。
                 float target_angle_R = 180.0f - phi_R_deg;
                 float target_angle_L = 180.0f + phi_L_deg;
 
                 // 6. 舵机指令平滑滤波
-                //    两端点都在 [60, 300] 连续弧内，不跨 0/360，用普通减法即可；
-                //    不能再用环形最短路径（会穿过 0/360 禁区）。
+                //    两端点都在 [80, 280] 连续弧内（200° 弧），不跨 0/360，用普通减法即可；
+                //    不能用环形最短路径（两端相距 >180° 时会穿过 0/360 禁区）。
                 //    α=0.4 → τ≈15ms：滤掉 IMU 单帧噪声，但不显著滞后于真实目标变化。
-                //    （原 α=0.1 → τ≈90ms，是舵机响应慢的主要软件瓶颈之一）
                 float diff_L = target_angle_L - filter_target_L;
                 filter_target_L += 0.4f * diff_L;
-                if (filter_target_L < 60.0f)  filter_target_L = 60.0f;
-                if (filter_target_L > 300.0f) filter_target_L = 300.0f;
+                if (filter_target_L < 80.0f)  filter_target_L = 80.0f;
+                if (filter_target_L > 280.0f) filter_target_L = 280.0f;
 
                 float diff_R = target_angle_R - filter_target_R;
                 filter_target_R += 0.4f * diff_R;
-                if (filter_target_R < 60.0f)  filter_target_R = 60.0f;
-                if (filter_target_R > 300.0f) filter_target_R = 300.0f;
+                if (filter_target_R < 80.0f)  filter_target_R = 80.0f;
+                if (filter_target_R > 280.0f) filter_target_R = 280.0f;
 
                 // ⚠ 实测：左右物理装配相对算法是镜像的，此处把 L/R 整组互换下发
                 //    互换后角度公式语义也跟着反了，所以再绕 180° 镜像一次（360 - x）
-                //    [60, 300] 区间关于 180° 中心对称，360-x 仍落在 [60, 300]。
+                //    [80, 280] 区间关于 180° 中心对称，360-x 仍落在 [80, 280]。
                 float send_tgt_L = 360.0f - filter_target_R;
                 float send_tgt_R = 360.0f - filter_target_L;
                 // 安全夹制（双保险，浮点误差不会越界）
-                if (send_tgt_L < 60.0f)  send_tgt_L = 60.0f;
-                if (send_tgt_L > 300.0f) send_tgt_L = 300.0f;
-                if (send_tgt_R < 60.0f)  send_tgt_R = 60.0f;
-                if (send_tgt_R > 300.0f) send_tgt_R = 300.0f;
+                if (send_tgt_L < 80.0f)  send_tgt_L = 80.0f;
+                if (send_tgt_L > 280.0f) send_tgt_L = 280.0f;
+                if (send_tgt_R < 80.0f)  send_tgt_R = 80.0f;
+                if (send_tgt_R > 280.0f) send_tgt_R = 280.0f;
                 steering_control_set_target(send_tgt_L, send_tgt_R);
 
                 // 取出 PID 实际跟踪的目标角（编码器系，与 cur_steer_* 同参考系）
@@ -623,9 +698,13 @@ void control_core_task(void *pvParameters) {
             float disp_tgt_L, disp_tgt_R;
             steering_control_get_target(&disp_tgt_L, &disp_tgt_R);
 
-            printf("Fwd:%.1f%% | TgtL:%.1f (Act:%.1f) | TgtR:%.1f (Act:%.1f) | Roll:%.2f | PWM_L:%u PWM_R:%u | Tau:%.0f dV:%.0f | Enc:%s/%s\n",
-                   g_forward_thrust, disp_tgt_L, cur_steer_left, disp_tgt_R, cur_steer_right,
-                   state.roll_deg, actual_pwm_L, actual_pwm_R, last_tau_total, last_V_balance,
+            float dbg_heading = 0.0f;
+            bno055_get_heading(&dbg_heading);
+            printf("Fwd:%.1f%%%s | TgtL:%.1f (Act:%.1f) | TgtR:%.1f (Act:%.1f) | Roll:%.2f | Hdg:%.1f%s | PWM_L:%u PWM_R:%u | Tau:%.0f dV:%.0f | Enc:%s/%s\n",
+                   g_forward_thrust, rc_input_is_cruising() ? "(CRZ)" : "",
+                   disp_tgt_L, cur_steer_left, disp_tgt_R, cur_steer_right,
+                   state.roll_deg, dbg_heading, g_heading_hold_active ? "(HOLD)" : "",
+                   actual_pwm_L, actual_pwm_R, last_tau_total, last_V_balance,
                    enc_left_fault ? "X" : "✓", enc_right_fault ? "X" : "✓");
             print_cnt = 0;
         }
@@ -643,12 +722,28 @@ void app_main(void)
     control_params_init();
 
     // 1. 初始化所有设备
+#if !USE_BNO055_FOR_ROLL
+    // MPU6050 路径：I2C0 由 imu_driver_init 接管
     if (imu_driver_init() != ESP_OK) {
         ESP_LOGE(TAG, "IMU 硬件异常！确保连线正确！(或当前是在无传感器测试)");
     }
+#endif
     balance_controller_init();
     motor_control_init();
     steering_control_init(); // 开启外部中断读取编码器；内部会尝试从 NVS 加载历史校准
+
+    // 2. 初始化 RC 油门 PWM 输入（GPIO PIN_RC_THROTTLE）
+    rc_input_init(PIN_RC_THROTTLE);  // 失败仅打印警告，不中断启动
+
+    // 3. 初始化 BNO055（I2C0，GPIO 8/9，考接 MPU6050 原接口）
+    //    USE_BNO055_FOR_ROLL=1 时：BNO055 同时负责 Roll 平衡与航向保持；=0 时仅用于航向保持
+    if (bno055_init() != ESP_OK) {
+#if USE_BNO055_FOR_ROLL
+        ESP_LOGE(TAG, "⚠ BNO055 初始化失败！平衡控制和航向保持均不可用");
+#else
+        ESP_LOGW(TAG, "⚠ BNO055 初始化失败，航向保持功能不可用");
+#endif
+    }
 
     // 注意：不再每次启动都自动校准。
     //  - 若 NVS 中已有保存的零点偏移，steering_control_init() 会自动加载。
@@ -734,12 +829,12 @@ void app_main(void)
                 // 检查是否是微调快捷键
                 if (strcmp(rx_buf, "w") == 0 || strcmp(rx_buf, "W") == 0) {
                     g_forward_thrust += 10.0f;
-                    if(g_forward_thrust > 100.0f) g_forward_thrust = 100.0f;
+                    if(g_forward_thrust > 50.0f) g_forward_thrust = 50.0f;
                     printf("\n>>> 前进推力 +10%%，当前目标: %.1f %% <<<\n", g_forward_thrust);
                 } 
                 else if (strcmp(rx_buf, "s") == 0 || strcmp(rx_buf, "S") == 0) {
                     g_forward_thrust -= 10.0f;
-                    if(g_forward_thrust < -100.0f) g_forward_thrust = -100.0f;
+                    if(g_forward_thrust < -50.0f) g_forward_thrust = -50.0f;
                     printf("\n>>> 前进推力 -10%%，当前目标: %.1f %% <<<\n", g_forward_thrust);
                 } 
                 else if (strcmp(rx_buf, "space") == 0 || rx_buf[0] == ' ') {
@@ -784,8 +879,8 @@ void app_main(void)
                     float input_val = strtof(rx_buf, &endptr);
                     if (endptr != rx_buf) { 
                         g_forward_thrust = input_val;
-                        if(g_forward_thrust > 100.0f) g_forward_thrust = 100.0f;
-                        if(g_forward_thrust < -100.0f) g_forward_thrust = -100.0f;
+                        if(g_forward_thrust > 50.0f) g_forward_thrust = 50.0f;
+                        if(g_forward_thrust < -50.0f) g_forward_thrust = -50.0f;
                         printf("\n>>> 收到绝对推力指令! 目标设为: %.1f %% <<<\n", g_forward_thrust);
                     } else {
                         printf("\n>>> 无效输入: %s <<<\n", rx_buf);
