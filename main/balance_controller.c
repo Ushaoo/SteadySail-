@@ -19,6 +19,7 @@ static float attitude_offset_roll = 0.0f;
 static float attitude_offset_pitch = 0.0f;
 static float attitude_offset_yaw = 0.0f;
 static bool  attitude_offset_captured = false;
+static int   attitude_settle_cnt = 0;  // 提到模块级：balance_controller_init() 可重置
 #define ATTITUDE_SETTLE_SAMPLES   100   // gyro 校准完后再等约 1s 让 Mahony 稳态收敛
 
 #define ALPHA_ACC  0.98f
@@ -63,6 +64,7 @@ void balance_controller_init(void) {
     attitude_offset_pitch = 0.0f;
     attitude_offset_yaw   = 0.0f;
     attitude_offset_captured = false;
+    attitude_settle_cnt = 0;  // ← 必须重置，否则二次 init 后第一帧就会立即锁零
     gyro_calibration_counter = 0;
     gyro_bias_x = gyro_bias_y = gyro_bias_z = 0.0f;
 }
@@ -193,9 +195,8 @@ void balance_controller_update(dual_imu_data_t *imu_data, balance_state_t *state
     // **********************************************
     if (!attitude_offset_captured) {
         // gyro 校准已结束 (前面 if 已 return)，这里再等 ATTITUDE_SETTLE_SAMPLES 个样本让姿态稳态
-        static int settle_cnt = 0;
-        settle_cnt++;
-        if (settle_cnt >= ATTITUDE_SETTLE_SAMPLES) {
+        attitude_settle_cnt++;
+        if (attitude_settle_cnt >= ATTITUDE_SETTLE_SAMPLES) {
             attitude_offset_roll  = state->roll_deg;
             attitude_offset_pitch = state->pitch_deg;
             attitude_offset_yaw   = state->yaw_deg;

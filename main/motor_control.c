@@ -164,8 +164,6 @@ void motor_control_set_steering_pwm(uint32_t pwm_left_us, uint32_t pwm_right_us)
     // 之前这里随意加 30ms 会拖慢 100Hz 控制循环 → PID 严重超调。
 }
 
-#define THRUST_SCALE 0.55f   // 力矩转 PWM 的比例系数（源自 Python）
-
 // ===== 双向推力下发（支持反转）=====
 void motor_control_set_pwm_bidirectional(float push_L, float push_R, bool invert_L, bool invert_R) {
     // 应用硬件层方向反转开关（由 system_config.h 集中配置）

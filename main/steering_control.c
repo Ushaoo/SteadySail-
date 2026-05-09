@@ -2,6 +2,8 @@
 #include "motor_control.h"
 #include "system_config.h"
 #include "control_params.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -24,10 +26,20 @@ typedef struct {
     volatile uint32_t period_us;
     volatile bool valid;
     volatile uint8_t bad_streak;     // 连续坏帧计数（去抖：连续 N 次才报无效）
+    // ===== 原子快照 =====
+    // ISR 在每个完整周期（上升沿）结束时，将 high_us/period_us 一次性打包写入 snap_*，
+    // 主任务只读 snap_* 而不直接读 high_us/period_us，避免跨周期撕裂读。
+    // 用 portMUX_TYPE 保护快照的写入与读取临界区。
+    volatile uint32_t snap_high;
+    volatile uint32_t snap_period;
+    volatile bool     snap_valid;
 } encoder_state_t;
 
-static encoder_state_t enc_left  = { .pin = PIN_ENC_LEFT, .valid = false };
-static encoder_state_t enc_right = { .pin = PIN_ENC_RIGHT, .valid = false };
+static encoder_state_t enc_left  = { .pin = PIN_ENC_LEFT,  .valid = false, .snap_valid = false };
+static encoder_state_t enc_right = { .pin = PIN_ENC_RIGHT, .valid = false, .snap_valid = false };
+
+// 编码器快照的 spinlock（ISR 与主任务共用）
+static portMUX_TYPE enc_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static float target_left = 180.0f;
 static float target_right = 180.0f;
@@ -52,6 +64,14 @@ static void IRAM_ATTR encoder_isr_handler(void* arg) {
     encoder_state_t* st = (encoder_state_t*) arg;
     int level = gpio_get_level(st->pin);
     int64_t now = esp_timer_get_time();
+
+    // 首次中断： last_edge_time==0 时 delta = now-0 是巨大值，会把
+    // high_us / period_us 污染成几十万 us，bad_streak 连增使 valid 反复在 false。
+    // 仅记录参考边沿时间，下一次中断才开始计算 delta。
+    if (st->last_edge_time == 0) {
+        st->last_edge_time = now;
+        return;
+    }
     int64_t delta = now - st->last_edge_time;
 
     if (delta < 5) return; // 5us 短期毛刺滤波
@@ -60,18 +80,29 @@ static void IRAM_ATTR encoder_isr_handler(void* arg) {
         // 下降沿：此时的 delta 是高电平时间
         st->high_us = (uint32_t)delta;
     } else {
-        // 上升沿：此时的 delta 是低电平时间（存入 period_us）
+        // 上升沿：此时的 delta 是低电平时间（周期完成）
         st->period_us = (uint32_t)delta;
 
         uint32_t total = st->high_us + st->period_us;
         if (total >= 100 && total <= 50000 && st->high_us > 0 && st->period_us > 0) {
             st->valid = true;
             st->bad_streak = 0;
+            // 整个周期数据就绪，原子写入快照（主任务只读 snap_*）
+            portENTER_CRITICAL_ISR(&enc_mux);
+            st->snap_high   = st->high_us;
+            st->snap_period = st->period_us;
+            st->snap_valid  = true;
+            portEXIT_CRITICAL_ISR(&enc_mux);
         } else {
             // 去抖：单次坏帧不立即报无效，连续 8 次才翻 valid=false
             // 一旦下一个完整周期正常，会自动恢复 valid=true（自纠正）
             if (st->bad_streak < 255) st->bad_streak++;
-            if (st->bad_streak >= 8) st->valid = false;
+            if (st->bad_streak >= 8) {
+                st->valid = false;
+                portENTER_CRITICAL_ISR(&enc_mux);
+                st->snap_valid = false;
+                portEXIT_CRITICAL_ISR(&enc_mux);
+            }
         }
     }
     st->last_edge_time = now;
@@ -156,6 +187,28 @@ void steering_control_init(void) {
     ESP_LOGI(TAG, "✓ Steering Encoder Interrupts Initialized.");
     ESP_LOGI(TAG, "  - Left Encoder GPIO: %d | Right Encoder GPIO: %d", PIN_ENC_LEFT, PIN_ENC_RIGHT);
 
+    // ===== 等待编码器输出稳定 (防 boot 阶段误以为舵在 180°) =====
+    // MT6826S 上电后需要几个 PWM 周期 (~5–20ms) 才输出稳定占空比。
+    // 如果不等，enterprise 循环会看到 valid=false，raw 返回 0 、归一化后为 180°，
+    // 并以为当前位置就是 180°。这里主动轮询最多 500ms，超时只告警不阻塞启动。
+    {
+        ESP_LOGI(TAG, "等待编码器输出稳定 (最多 500ms)...");
+        TickType_t t0 = xTaskGetTickCount();
+        const TickType_t TIMEOUT = pdMS_TO_TICKS(500);
+        while (!enc_left.valid || !enc_right.valid) {
+            if (xTaskGetTickCount() - t0 > TIMEOUT) {
+                ESP_LOGW(TAG, "⚠ 编码器 500ms 内未稳定: L_valid=%d R_valid=%d。启动继续，但初始读数可能不准",
+                         (int)enc_left.valid, (int)enc_right.valid);
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        if (enc_left.valid && enc_right.valid) {
+            ESP_LOGI(TAG, "✓ 编码器已稳定 (耗时 %d ms)",
+                     (int)((xTaskGetTickCount() - t0) * portTICK_PERIOD_MS));
+        }
+    }
+
     // 尝试从 NVS 加载上次保存的零点偏移
     float loaded_l = 0.0f, loaded_r = 0.0f;
     if (nvs_load_offsets(&loaded_l, &loaded_r) == ESP_OK) {
@@ -189,8 +242,20 @@ void steering_control_get_target(float *left_deg, float *right_deg) {
 }
 void steering_control_calibrate_and_save(void) {
     // 读取当前编码器的竖直状态值作为校准基准
-    float cal_left  = compute_angle(enc_left.high_us,  enc_left.period_us,  enc_left.valid);
-    float cal_right = compute_angle(enc_right.high_us, enc_right.period_us, enc_right.valid);
+    // 原子读取快照（与 get_current_angles 保持一致）
+    uint32_t snap_high_L, snap_period_L; bool snap_valid_L;
+    uint32_t snap_high_R, snap_period_R; bool snap_valid_R;
+    portENTER_CRITICAL(&enc_mux);
+    snap_high_L   = enc_left.snap_high;
+    snap_period_L = enc_left.snap_period;
+    snap_valid_L  = enc_left.snap_valid;
+    snap_high_R   = enc_right.snap_high;
+    snap_period_R = enc_right.snap_period;
+    snap_valid_R  = enc_right.snap_valid;
+    portEXIT_CRITICAL(&enc_mux);
+
+    float cal_left  = compute_angle(snap_high_L, snap_period_L, snap_valid_L);
+    float cal_right = compute_angle(snap_high_R, snap_period_R, snap_valid_R);
 
     // 设置偏移使得初始竖直状态对应 180°（避免 0/360 边界抖动）
     offset_left  = cal_left  - 180.0f;
@@ -218,8 +283,35 @@ bool steering_control_is_calibrated(void) {
 }
 
 void steering_control_get_current_angles(float *left_deg, float *right_deg) {
-    float raw_left = compute_angle(enc_left.high_us, enc_left.period_us, enc_left.valid);
-    float raw_right = compute_angle(enc_right.high_us, enc_right.period_us, enc_right.valid);
+    // ===== valid 从 false 翻为 true 时，强制重新播种 =====
+    // 这个场景例如： boot 阶段编码器一直 invalid，filtered 在 180°；突然 valid=true 后
+            // 真实 raw 可能距 180 远远大于 40°，会被野值剖除永久卵住。
+    // 主动检测上一帧 valid 状态，发现恢复就清 seeded 让下面 seed 分支重新播种。
+    static bool prev_left_valid  = false;
+    static bool prev_right_valid = false;
+    if (enc_left.valid && !prev_left_valid) {
+        filtered_left_seeded = false;
+    }
+    if (enc_right.valid && !prev_right_valid) {
+        filtered_right_seeded = false;
+    }
+    prev_left_valid  = enc_left.valid;
+    prev_right_valid = enc_right.valid;
+
+    // 通过临界区原子读取 ISR 快照，避免读到 high_us/period_us 属于不同周期的数据
+    uint32_t snap_high_L, snap_period_L; bool snap_valid_L;
+    uint32_t snap_high_R, snap_period_R; bool snap_valid_R;
+    portENTER_CRITICAL(&enc_mux);
+    snap_high_L   = enc_left.snap_high;
+    snap_period_L = enc_left.snap_period;
+    snap_valid_L  = enc_left.snap_valid;
+    snap_high_R   = enc_right.snap_high;
+    snap_period_R = enc_right.snap_period;
+    snap_valid_R  = enc_right.snap_valid;
+    portEXIT_CRITICAL(&enc_mux);
+
+    float raw_left  = compute_angle(snap_high_L, snap_period_L, snap_valid_L);
+    float raw_right = compute_angle(snap_high_R, snap_period_R, snap_valid_R);
     
     // 相对于初始校准点的角度
     raw_left = raw_left - offset_left;
@@ -335,19 +427,23 @@ static float calculate_pid(float error, float *integral, float *prev_error, floa
 
     float raw_out = p_out + i_out + d_out;
 
-    // 低通滤波
-    float alpha = dt / (0.12f + dt);
+    // 低通滤波（仅平滑 D 项高频噪声，不应大幅限制 P 项响应速度）
+    // 原 0.12f → τ≈125ms，截止~1.3Hz，过度压慢了整体响应。
+    // 改为 0.03f → τ≈30ms，截止~5.3Hz，与大电机推力滤波器一致。
+    // 如果振荡，可尝试 0.05f（τ≈50ms）作为中间值。
+    float alpha = dt / (0.03f + dt);
     *out_filt = *out_filt + alpha * (raw_out - *out_filt);
 
     float final_out = *out_filt;
     if (final_out > 500.0f) final_out = 500.0f;
     if (final_out < -500.0f) final_out = -500.0f;
     
-    // 输出阈值：避免小于阈值的信号导致电机微弱运转
+    // 输出死区：低于 30 的微弱信号清零，防止电机连续微弱运转损耗。
+    // ⚠ 注意：不再做 30→60 的强制跳变。原因：当 PID 输出在 [30,60) 时若强推到 60，
+    // 会在死区边缘（误差 2°~4°）产生速度不连续，引起 60→-60 反复振荡（bang-bang 效应）。
+    // 去掉后 PID 输出连续变化，由 DEADZONE=3° 的外层门控负责抑制微小误差。
     if (fabsf(final_out) < 30.0f) {
         final_out = 0.0f;
-    } else if (fabsf(final_out) < 60.0f) {        // 提高到 60
-        final_out = (final_out > 0) ? 60.0f : -60.0f;
     }
     
 

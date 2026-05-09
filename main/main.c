@@ -3,6 +3,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "system_config.h"
 #include <math.h>
 #include <string.h>
@@ -95,17 +96,36 @@ static float g_test_steer_angle = 180.0f;
 volatile float g_demo_roll_deg = 0.0f;
 
 // 转向机构只转测试任务 (100Hz)
+//
+// 【响应时间分析】
+//   每次检测到 g_test_steer_angle 变化（=收到串口/Blinker 新指令），
+//   重置 t0，逐帧打印 [t=NNms] err/pwm；当 |err_L|<TOL 且 |err_R|<TOL 持续
+//   STEADY_FRAMES 帧后，打印 [ARRIVED]；超过 TIMEOUT_MS 还没到则打印 [TIMEOUT]。
+//   到达后回到"静默"状态，不再每帧刷屏，直到下一次目标变化。
 void steering_test_task(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xFrequency = pdMS_TO_TICKS(10);
 
     ESP_LOGI(TAG, "========== 独立转向机构测试模式 ==========");
     ESP_LOGI(TAG, "串口输入数字直接设置舵机角度(90~270度)");
+    ESP_LOGI(TAG, "[响应分析] 每次目标变化会自动测量到达时间，无需额外操作");
+
+    // ===== 响应时间统计变量 =====
+    const float    ARRIVE_TOL_DEG = 2.0f;   // 误差进入此阈值视为到达
+    const int      STEADY_FRAMES  = 5;      // 连续 5 帧 (50ms) 都在阈值内才算稳定
+    const uint32_t TIMEOUT_MS     = 2000;   // 2s 还没到达就报超时
+
+    float    last_target   = g_test_steer_angle;
+    bool     measuring     = false;         // 是否在测量中（目标变化后未到达/未超时）
+    int64_t  t0_us         = 0;             // 目标变化时刻 (esp_timer_get_time)
+    int      steady_cnt_L  = 0, steady_cnt_R = 0;
+    bool     arrived_L     = false, arrived_R = false;
+    int64_t  arrive_us_L   = 0, arrive_us_R = 0;
 
     while(1) {
         // 大电机强制安全停转
         motor_control_emergency_stop();
-        
+
         // 左右电机同步接受输入的测试角度
         steering_control_set_target(g_test_steer_angle, g_test_steer_angle);
         steering_control_update();
@@ -118,12 +138,81 @@ void steering_test_task(void *pvParameters) {
         uint32_t pwm_L = 1500, pwm_R = 1500;
         motor_control_get_last_steer_pwm(&pwm_L, &pwm_R);
 
-        static int print_cnt = 0;
-        if (++print_cnt >= 5) { // 20Hz
-            ESP_LOGI(TAG, "[转向测试] Target: %.1f° | 实际L: %.1f°, 实际R: %.1f° | PWM_L: %lu us, PWM_R: %lu us",
-                   g_test_steer_angle, act_L, act_R,
-                   (unsigned long)pwm_L, (unsigned long)pwm_R);
-            print_cnt = 0;
+        // ===== 响应时间统计逻辑 =====
+        float cur_target = g_test_steer_angle;
+        if (cur_target != last_target) {
+            // 目标变化 -> 重置统计
+            t0_us        = esp_timer_get_time();
+            measuring    = true;
+            steady_cnt_L = 0;
+            steady_cnt_R = 0;
+            arrived_L    = false;
+            arrived_R    = false;
+            arrive_us_L  = 0;
+            arrive_us_R  = 0;
+            ESP_LOGW(TAG, "[STEP] target %.1f° -> %.1f°  开始测量到达时间", last_target, cur_target);
+            last_target = cur_target;
+        }
+
+        if (measuring) {
+            int64_t now_us  = esp_timer_get_time();
+            uint32_t elapsed_ms = (uint32_t)((now_us - t0_us) / 1000);
+
+            // 误差用环形最短路径（避免 0/360 边界跨越）
+            float err_L = act_L - cur_target;
+            while (err_L >  180.0f) err_L -= 360.0f;
+            while (err_L < -180.0f) err_L += 360.0f;
+            float err_R = act_R - cur_target;
+            while (err_R >  180.0f) err_R -= 360.0f;
+            while (err_R < -180.0f) err_R += 360.0f;
+
+            // 每帧打印过程数据 (100Hz)
+            ESP_LOGI(TAG, "[t=%4u ms] L=%.1f° (err=%+.2f) R=%.1f° (err=%+.2f) pwm_L=%lu pwm_R=%lu",
+                     (unsigned)elapsed_ms, act_L, err_L, act_R, err_R,
+                     (unsigned long)pwm_L, (unsigned long)pwm_R);
+
+            // 单侧到达判定
+            if (!arrived_L) {
+                if (fabsf(err_L) <= ARRIVE_TOL_DEG) {
+                    if (++steady_cnt_L >= STEADY_FRAMES) {
+                        // 取首帧进入阈值的时间点（回退 (STEADY_FRAMES-1)*10ms）
+                        arrive_us_L = now_us - (int64_t)(STEADY_FRAMES - 1) * 10000;
+                        arrived_L = true;
+                        uint32_t t_L_ms = (uint32_t)((arrive_us_L - t0_us) / 1000);
+                        ESP_LOGW(TAG, "[ARRIVED L] %u ms (容差 ±%.1f°)", (unsigned)t_L_ms, ARRIVE_TOL_DEG);
+                    }
+                } else {
+                    steady_cnt_L = 0;
+                }
+            }
+            if (!arrived_R) {
+                if (fabsf(err_R) <= ARRIVE_TOL_DEG) {
+                    if (++steady_cnt_R >= STEADY_FRAMES) {
+                        arrive_us_R = now_us - (int64_t)(STEADY_FRAMES - 1) * 10000;
+                        arrived_R = true;
+                        uint32_t t_R_ms = (uint32_t)((arrive_us_R - t0_us) / 1000);
+                        ESP_LOGW(TAG, "[ARRIVED R] %u ms (容差 ±%.1f°)", (unsigned)t_R_ms, ARRIVE_TOL_DEG);
+                    }
+                } else {
+                    steady_cnt_R = 0;
+                }
+            }
+
+            // 双侧都到 -> 测量结束
+            if (arrived_L && arrived_R) {
+                uint32_t t_L_ms = (uint32_t)((arrive_us_L - t0_us) / 1000);
+                uint32_t t_R_ms = (uint32_t)((arrive_us_R - t0_us) / 1000);
+                uint32_t t_max  = (t_L_ms > t_R_ms) ? t_L_ms : t_R_ms;
+                ESP_LOGW(TAG, "[DONE] target=%.1f°  L_arrive=%u ms  R_arrive=%u ms  整体=%u ms",
+                         cur_target, (unsigned)t_L_ms, (unsigned)t_R_ms, (unsigned)t_max);
+                measuring = false;
+            }
+            // 超时
+            else if (elapsed_ms >= TIMEOUT_MS) {
+                ESP_LOGE(TAG, "[TIMEOUT] %u ms 仍未到达: L_err=%+.2f° R_err=%+.2f° (容差 ±%.1f°)",
+                         (unsigned)elapsed_ms, err_L, err_R, ARRIVE_TOL_DEG);
+                measuring = false;
+            }
         }
 
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
@@ -365,13 +454,15 @@ void control_core_task(void *pvParameters) {
                 // 6. 舵机指令平滑滤波
                 //    两端点都在 [60, 300] 连续弧内，不跨 0/360，用普通减法即可；
                 //    不能再用环形最短路径（会穿过 0/360 禁区）。
+                //    α=0.4 → τ≈15ms：滤掉 IMU 单帧噪声，但不显著滞后于真实目标变化。
+                //    （原 α=0.1 → τ≈90ms，是舵机响应慢的主要软件瓶颈之一）
                 float diff_L = target_angle_L - filter_target_L;
-                filter_target_L += 0.1f * diff_L;
+                filter_target_L += 0.4f * diff_L;
                 if (filter_target_L < 60.0f)  filter_target_L = 60.0f;
                 if (filter_target_L > 300.0f) filter_target_L = 300.0f;
 
                 float diff_R = target_angle_R - filter_target_R;
-                filter_target_R += 0.1f * diff_R;
+                filter_target_R += 0.4f * diff_R;
                 if (filter_target_R < 60.0f)  filter_target_R = 60.0f;
                 if (filter_target_R > 300.0f) filter_target_R = 300.0f;
 
