@@ -289,10 +289,13 @@ void control_core_task(void *pvParameters) {
             continue;
         }
 
-        // ====== RC 遥感油门：有信号时直接覆写 g_forward_thrust ======
-        // 无 RC 信号时 rc_input_get_throttle() 返回 0.0，Blinker 按钮仍可控制
+        // ====== RC 遥感油门：摇杆非中位 或 巡航激活时才覆写 g_forward_thrust ======
+        // 摇杆在中位（raw=0）且未巡航时，保留 Blinker/串口设定的值，不覆盖。
         if (rc_input_is_valid()) {
-            g_forward_thrust = rc_input_get_throttle();
+            float rc_val = rc_input_get_throttle();
+            if (rc_val != 0.0f || rc_input_is_cruising()) {
+                g_forward_thrust = rc_val;
+            }
         }
 
         // 获取当前的物理真实角度
