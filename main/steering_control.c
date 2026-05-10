@@ -26,6 +26,7 @@ typedef struct {
     volatile uint32_t period_us;
     volatile bool valid;
     volatile uint8_t bad_streak;     // 连续坏帧计数（去抖：连续 N 次才报无效）
+    volatile int64_t last_valid_us;  // 最后一次收到合法帧的时间戳（用于超时断线检测）
     // ===== 原子快照 =====
     // ISR 在每个完整周期（上升沿）结束时，将 high_us/period_us 一次性打包写入 snap_*，
     // 主任务只读 snap_* 而不直接读 high_us/period_us，避免跨周期撕裂读。
@@ -93,6 +94,7 @@ static void IRAM_ATTR encoder_isr_handler(void* arg) {
             st->snap_period = st->period_us;
             st->snap_valid  = true;
             portEXIT_CRITICAL_ISR(&enc_mux);
+            st->last_valid_us = now;  // 记录最后一次合法帧时间戳
         } else {
             // 去抖：单次坏帧不立即报无效，连续 8 次才翻 valid=false
             // 一旦下一个完整周期正常，会自动恢复 valid=true（自纠正）
@@ -282,10 +284,33 @@ bool steering_control_is_calibrated(void) {
     return s_calibrated;
 }
 
+// 编码器超时阈值：正常周期 ~5ms~50ms，150ms 内无合法帧视为断线
+#define ENC_TIMEOUT_US  150000LL
+
 void steering_control_get_current_angles(float *left_deg, float *right_deg) {
+    // ===== 超时断线检测 =====
+    // ISR 断线后不再触发，bad_streak 永远不增，valid 永远停留 true。
+    // 主动用时间戳判断：超过 150ms 无合法帧则主动置 valid=false，让 PID 停转。
+    // 恢复时 ISR 好帧会重新置 valid=true，播种逻辑自动感知并重新播种。
+    {
+        int64_t now = esp_timer_get_time();
+        if (enc_left.valid && enc_left.last_valid_us > 0 &&
+            (now - enc_left.last_valid_us) > ENC_TIMEOUT_US) {
+            enc_left.valid     = false;
+            enc_left.snap_valid = false;
+            ESP_LOGW(TAG, "左编码器超时断线，停转保护");
+        }
+        if (enc_right.valid && enc_right.last_valid_us > 0 &&
+            (now - enc_right.last_valid_us) > ENC_TIMEOUT_US) {
+            enc_right.valid     = false;
+            enc_right.snap_valid = false;
+            ESP_LOGW(TAG, "右编码器超时断线，停转保护");
+        }
+    }
+
     // ===== valid 从 false 翻为 true 时，强制重新播种 =====
     // 这个场景例如： boot 阶段编码器一直 invalid，filtered 在 180°；突然 valid=true 后
-            // 真实 raw 可能距 180 远远大于 40°，会被野值剖除永久卵住。
+    // 真实 raw 可能距 180 远远大于 40°，会被野值剔除永久卡住。
     // 主动检测上一帧 valid 状态，发现恢复就清 seeded 让下面 seed 分支重新播种。
     static bool prev_left_valid  = false;
     static bool prev_right_valid = false;
