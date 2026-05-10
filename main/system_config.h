@@ -40,9 +40,24 @@
 #define PIN_I2C1_SDA    10  // IMU 2
 #define PIN_I2C1_SCL    11
 
-// --- 转向编码器输入 (MT6826S 脉宽捕获) ---
+// --- 编码器接口模式切换 ---
+//   0 = PWM 脉宽捕获（当前接线，无需改硬件）
+//   1 = SPI 模式（抗 EMI 更强，需改焊 MT6826S MODE 引脚到 VCC 并接 SPI 线）
+#define ENC_USE_SPI     1
+
+// --- 转向编码器输入 (MT6826S PWM 模式) ---
 #define PIN_ENC_LEFT    5
 #define PIN_ENC_RIGHT   4
+
+// --- 转向编码器输入 (MT6826S SPI 模式) ---
+// 两个编码器共用 MISO + MOSI + SCLK，各用独立 CS
+// ⚠ MOSI 必须接！MT6826S 需要通过 MOSI 接收读取命令（连续读命令 0xA0 0x03）
+#define PIN_SPI_MISO        5   // 与 PWM 模式 PIN_ENC_LEFT 复用，改接线后此脚接 MISO
+#define PIN_SPI_SCLK        4   // 与 PWM 模式 PIN_ENC_RIGHT 复用，改接线后此脚接 SCLK
+#define PIN_SPI_MOSI        15  // 新增：接两个编码器的 MOSI（共用），选一个空闲 GPIO
+#define PIN_SPI_CS_LEFT     6   // 左编码器片选
+#define PIN_SPI_CS_RIGHT    3   // 右编码器片选
+#define ENC_SPI_CLOCK_HZ    2000000   // 2 MHz，MT6826S 最大 16 MHz，留余量
 
 // --- 转向小电机 PWM 输出 ---
 #define PIN_STEER_LEFT  2
@@ -110,7 +125,7 @@
 #define THRUST_RIGHT_INVERT    0    // 0=正常, 1=反转右推进器输出方向
 
 #define STEER_LEFT_INVERT      1    // 0=正常, 1=反转左舵机 PWM 方向
-#define STEER_RIGHT_INVERT     0    // 0=正常, 1=反转右舵机 PWM 方向
+#define STEER_RIGHT_INVERT     1    // 0=正常, 1=反转右舵机 PWM 方向
 
 #define ENC_LEFT_REVERSE       0    // 0=正常, 1=反转左编码器读数0
 
@@ -135,7 +150,7 @@
 //   - Ki 消除稳态偏差（如长期受单侧风/流影响），建议从 0.05 开始
 //   - 输出饱和限幅 = TURN_DELTA_H（与手动差速共用上限）
 // ==========================================
-#define HEADING_KP          0.8f    // 航向保持 P 增益 (dH/°)
+#define HEADING_KP          8.0f    // 航向保持 P 增益 (dH/°)
 #define HEADING_KI          0.05f   // 航向保持 I 增益 (dH/(°·s))
 
 // ==========================================

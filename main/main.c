@@ -289,13 +289,38 @@ void control_core_task(void *pvParameters) {
             continue;
         }
 
-        // ====== RC 遥感油门：摇杆非中位 或 巡航激活时才覆写 g_forward_thrust ======
-        // 摇杆在中位（raw=0）且未巡航时，保留 Blinker/串口设定的值，不覆盖。
+        // ====== RC 遥感油门：有信号时直接覆写 g_forward_thrust ======
+        // 摇杆归中（raw=0）时也归零——松开摇杆=停船，优先于 Blinker/串口设定值。
+        // 巡航激活时 rc_input_get_throttle() 返回巡航值而非 0，正常接管。
+        // 摇杆未插/信号超时时 rc_input_is_valid()==false，Blinker/串口可控制。
         if (rc_input_is_valid()) {
-            float rc_val = rc_input_get_throttle();
-            if (rc_val != 0.0f || rc_input_is_cruising()) {
-                g_forward_thrust = rc_val;
+            g_forward_thrust = rc_input_get_throttle();
+        }
+
+        // ====== 定速巡航联动定航向 ======
+        // 检测巡航状态边沿：激活时自动锁定当前航向；取消时自动解除航向保持。
+        {
+            static bool s_prev_cruising = false;
+            bool now_cruising = rc_input_is_cruising();
+            if (now_cruising && !s_prev_cruising) {
+                // 巡航刚激活：锁定当前航向
+                float hdg = 0.0f;
+                if (bno055_get_heading(&hdg) == ESP_OK) {
+                    g_target_heading      = hdg;
+                    g_heading_hold_active = true;
+                    printf("[CRZ] 定速 %.1f%% + 定航向 %.1f° 同时激活\n",
+                           g_forward_thrust, hdg);
+                } else {
+                    g_heading_hold_active = false;
+                    printf("[CRZ] 定速 %.1f%% 激活，BNO055 读取失败，仅定速\n",
+                           g_forward_thrust);
+                }
+            } else if (!now_cruising && s_prev_cruising) {
+                // 巡航刚取消：解除航向保持
+                g_heading_hold_active = false;
+                printf("[CRZ] 定速取消，航向保持已解除\n");
             }
+            s_prev_cruising = now_cruising;
         }
 
         // 获取当前的物理真实角度
@@ -473,10 +498,9 @@ void control_core_task(void *pvParameters) {
                         if (dH_heading >  TURN_DELTA_H) dH_heading =  TURN_DELTA_H;
                         if (dH_heading < -TURN_DELTA_H) dH_heading = -TURN_DELTA_H;
 
-                        // 注意：与手动差速相同的极性约定（turn_dir 取反已内化在此）
-                        // 偏航误差 > 0 → 当前航向偏左 → 需右转 → H_L 增大
-                        H_L = H_thrust + dH_heading;
-                        H_R = H_thrust - dH_heading;
+                        // 偏航误差 > 0 → 当前航向偏左 → 需右转 → H_R 增大
+                        H_L = H_thrust - dH_heading;
+                        H_R = H_thrust + dH_heading;
                     }
                     // BNO055 读取失败：保持上一帧的 H_L/H_R（已是 H_thrust+dH_heading），
                     // 下一帧继续尝试。

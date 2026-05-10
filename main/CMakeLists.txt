@@ -5,5 +5,5 @@ idf_component_register(
          "motor_control.c"
          "steering_control.c"
     INCLUDE_DIRS "."
-    REQUIRES Blinker json nvs_flash
+    REQUIRES Blinker json nvs_flash driver
 )

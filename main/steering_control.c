@@ -10,6 +10,9 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include <math.h>
+#if ENC_USE_SPI
+#include "driver/spi_master.h"
+#endif
 
 static const char *TAG = "STEERING";
 
@@ -17,6 +20,19 @@ static const char *TAG = "STEERING";
 #define STEER_NVS_NS       "steering"
 #define STEER_NVS_KEY_OFFL "off_l"
 #define STEER_NVS_KEY_OFFR "off_r"
+
+// ============================================================
+// 编码器硬件层：PWM 模式 与 SPI 模式 通过 ENC_USE_SPI 切换
+// 对外接口：
+//   enc_hw_init()          — 初始化硬件
+//   enc_hw_read(side)      — 读取原始角度 [0, 360)，失败返回 -1.0f
+//   enc_hw_is_valid(side)  — 当前读数是否有效
+// ============================================================
+
+#if !ENC_USE_SPI
+// ============================================================
+// PWM 模式（默认）：边沿中断捕获占空比
+// ============================================================
 
 // --- 编码器硬件捕获 (MT6826S PWM 模式) ---
 typedef struct {
@@ -42,6 +58,22 @@ static encoder_state_t enc_right = { .pin = PIN_ENC_RIGHT, .valid = false, .snap
 // 编码器快照的 spinlock（ISR 与主任务共用）
 static portMUX_TYPE enc_mux = portMUX_INITIALIZER_UNLOCKED;
 
+#else
+// ============================================================
+// SPI 模式：主动轮询，MT6826S SPI Mode 3 (CPOL=1, CPHA=1)
+// 16-bit 帧格式：[15:2]=14bit角度, [1]=OCF(偏移补偿完成), [0]=奇偶校验
+// ============================================================
+static spi_device_handle_t spi_dev_left  = NULL;
+static spi_device_handle_t spi_dev_right = NULL;
+// SPI 模式下编码器有效状态（上次读取结果）
+static bool spi_valid_left  = false;
+static bool spi_valid_right = false;
+// init 时是否检测到编码器实际存在（未接线的侧永远不读取，避免浮空 MISO 乱跳）
+static bool spi_present_left  = false;
+static bool spi_present_right = false;
+
+#endif  // !ENC_USE_SPI
+
 static float target_left = 180.0f;
 static float target_right = 180.0f;
 
@@ -60,7 +92,8 @@ static bool filtered_right_seeded = false;
 // 是否已经完成"竖直 → 180°"校准（NVS 加载成功 或 用户手动触发过）
 static bool s_calibrated = false;
 
-// --- ISR 外部中断处理函数 ---
+// --- ISR 外部中断处理函数 (仅 PWM 模式) ---
+#if !ENC_USE_SPI
 static void IRAM_ATTR encoder_isr_handler(void* arg) {
     encoder_state_t* st = (encoder_state_t*) arg;
     int level = gpio_get_level(st->pin);
@@ -132,6 +165,74 @@ static float compute_angle(volatile uint32_t high_us, volatile uint32_t period_u
     return angle;
 }
 
+#else  // ENC_USE_SPI
+
+// SPI 连续读角度寄存器（数据手册 Section 8.6.8）
+// MT6826S SPI Mode 3，帧格式：24-bit 命令头 + 流式数据
+//
+// TX (6字节):
+//   Byte0: [1010][A11..A8] = 0xA0  (连续读命令 + 地址高4位)
+//   Byte1: [A7..A0]        = 0x03  (寄存器地址 0x003)
+//   Byte2~5: dummy 0x00           (提供时钟，接收数据)
+//
+// RX (6字节):
+//   Byte0~1: Hi-Z (命令/地址阶段，忽略)
+//   Byte2:   ANGLE[14:7]          (寄存器 0x003)
+//   Byte3:   ANGLE[6:0] | 0       (寄存器 0x004，bit0 固定为 0)
+//   Byte4:   00000 | STATUS[2:0]  (寄存器 0x005)
+//   Byte5:   CRC[7:0]             (寄存器 0x006，可选校验)
+//
+// 角度公式：θ = ANGLE[14:0] / 32768 * 360°  (15-bit，数据手册 Section 8.6.7)
+static float spi_read_encoder(spi_device_handle_t dev, bool *valid_out) {
+    if (dev == NULL) { *valid_out = false; return -1.0f; }
+    // 未接线的编码器（init 时从未 valid）：直接跳过 SPI 事务，避免浮空 MISO 乱跳
+    // 注意：spi_present_* 在第一次调用（init 轮询）时尚未赋值，此时允许正常读取
+    if (dev == spi_dev_left  && spi_dev_left  != NULL && !spi_present_left
+        && (spi_valid_left || spi_valid_right)) { // init 完成后才生效
+        *valid_out = false; return -1.0f;
+    }
+    if (dev == spi_dev_right && spi_dev_right != NULL && !spi_present_right
+        && (spi_valid_left || spi_valid_right)) {
+        *valid_out = false; return -1.0f;
+    }
+
+    static const uint8_t tx_buf[6] = {0xA0, 0x03, 0x00, 0x00, 0x00, 0x00};
+    uint8_t rx_buf[6] = {0};
+
+    spi_transaction_t t = {
+        .length    = 48,       // 6 字节 = 48 bit
+        .tx_buffer = tx_buf,
+        .rx_buffer = rx_buf,
+    };
+
+    esp_err_t ret = spi_device_transmit(dev, &t);
+    if (ret != ESP_OK) { *valid_out = false; return -1.0f; }
+
+    uint8_t angle_h = rx_buf[2];        // ANGLE[14:7]
+    uint8_t angle_l = rx_buf[3];        // ANGLE[6:0] in bits[7:1], bit0 固定 0
+    uint8_t status  = rx_buf[4] & 0x07; // STATUS[2:0]
+
+    // 诊断打印：每隔 200 次打印一次（约 2s @ 100Hz）
+    static int dbg_cnt = 0;
+    if (++dbg_cnt >= 200) {
+        dbg_cnt = 0;
+        uint16_t raw15 = ((uint16_t)angle_h << 7) | (angle_l >> 1);
+        ESP_LOGI(TAG, "[ENC SPI] angle_h=%02X angle_l=%02X STATUS=%d raw15=%u",
+                 angle_h, angle_l, status, raw15);
+    }
+
+    // STATUS[1]=1: 磁场过弱；STATUS[2]=1: 供电欠压 → 数据不可信
+    if (status & 0x06) { *valid_out = false; return -1.0f; }
+
+    // 重建 15-bit 角度值 ANGLE[14:0]
+    uint16_t angle_raw = ((uint16_t)angle_h << 7) | (angle_l >> 1);
+    float angle = (float)angle_raw / 32768.0f * 360.0f;
+    *valid_out = true;
+    return angle;
+}
+
+#endif  // !ENC_USE_SPI
+
 // 最短路径环形误差计算
 static float shortest_angle_error(float target, float current) {
     float err = target - current;
@@ -173,6 +274,8 @@ static esp_err_t nvs_save_offsets(float off_l, float off_r) {
 }
 
 void steering_control_init(void) {
+#if !ENC_USE_SPI
+    // ===== PWM 模式：配置 GPIO 边沿中断 =====
     gpio_config_t io_conf = {
         .intr_type = GPIO_INTR_ANYEDGE,
         .mode = GPIO_MODE_INPUT,
@@ -211,6 +314,66 @@ void steering_control_init(void) {
         }
     }
 
+#else  // ENC_USE_SPI
+    // ===== SPI 模式：初始化 SPI 总线并添加两个从设备 =====
+    spi_bus_config_t bus_cfg = {
+        .miso_io_num     = PIN_SPI_MISO,
+        .mosi_io_num     = PIN_SPI_MOSI,  // 必须接：发送连续读命令 0xA0 0x03
+        .sclk_io_num     = PIN_SPI_SCLK,
+        .quadwp_io_num   = -1,
+        .quadhd_io_num   = -1,
+        .max_transfer_sz = 6,             // 每次 6 字节 = 48 bit
+    };
+    ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &bus_cfg, SPI_DMA_DISABLED));
+
+    // MISO 加软件上拉：编码器未接时 MISO 浮空，上拉后读到全 1，STATUS≠0，稳定报 invalid
+    gpio_set_pull_mode(PIN_SPI_MISO, GPIO_PULLUP_ONLY);
+
+    spi_device_interface_config_t dev_cfg = {
+        .clock_speed_hz  = ENC_SPI_CLOCK_HZ,
+        .mode            = 3,             // MT6826S: CPOL=1, CPHA=1
+        .spics_io_num    = PIN_SPI_CS_LEFT,
+        .queue_size      = 1,
+        .command_bits    = 0,
+        .address_bits    = 0,
+        .cs_ena_pretrans = 1,             // CSN↓ 后至少 1 个时钟周期才发 SCK（满足 TL≥100ns）
+    };
+    ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &dev_cfg, &spi_dev_left));
+
+    dev_cfg.spics_io_num = PIN_SPI_CS_RIGHT;
+    ESP_ERROR_CHECK(spi_bus_add_device(SPI2_HOST, &dev_cfg, &spi_dev_right));
+
+    ESP_LOGI(TAG, "✓ Steering Encoder SPI Initialized (Mode3, %d Hz).", ENC_SPI_CLOCK_HZ);
+    ESP_LOGI(TAG, "  - MISO=%d MOSI=%d SCLK=%d CS_L=%d CS_R=%d",
+             PIN_SPI_MISO, PIN_SPI_MOSI, PIN_SPI_SCLK, PIN_SPI_CS_LEFT, PIN_SPI_CS_RIGHT);
+
+    // SPI 上电后等待 MT6826S OCF 就绪（通常 < 50ms）
+    {
+        ESP_LOGI(TAG, "等待编码器 OCF 就绪 (最多 500ms)...");
+        TickType_t t0 = xTaskGetTickCount();
+        const TickType_t TIMEOUT = pdMS_TO_TICKS(500);
+        bool init_vl = false, init_vr = false;
+        while (true) {
+            spi_read_encoder(spi_dev_left,  &init_vl);
+            spi_read_encoder(spi_dev_right, &init_vr);
+            if (init_vl && init_vr) {
+                ESP_LOGI(TAG, "✓ 两侧编码器均就绪 (耗时 %d ms)",
+                         (int)((xTaskGetTickCount() - t0) * portTICK_PERIOD_MS));
+                break;
+            }
+            if (xTaskGetTickCount() - t0 > TIMEOUT) {
+                ESP_LOGW(TAG, "⚠ 编码器 500ms 超时: L=%d R=%d", (int)init_vl, (int)init_vr);
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        // 记录哪侧编码器实际存在（超时后未曾 valid 的侧视为未接线，后续跳过读取）
+        spi_present_left  = init_vl;
+        spi_present_right = init_vr;
+        ESP_LOGI(TAG, "编码器在线: L=%d R=%d", (int)spi_present_left, (int)spi_present_right);
+    }
+#endif  // !ENC_USE_SPI
+
     // 尝试从 NVS 加载上次保存的零点偏移
     float loaded_l = 0.0f, loaded_r = 0.0f;
     if (nvs_load_offsets(&loaded_l, &loaded_r) == ESP_OK) {
@@ -244,7 +407,10 @@ void steering_control_get_target(float *left_deg, float *right_deg) {
 }
 void steering_control_calibrate_and_save(void) {
     // 读取当前编码器的竖直状态值作为校准基准
-    // 原子读取快照（与 get_current_angles 保持一致）
+    float cal_left, cal_right;
+
+#if !ENC_USE_SPI
+    // PWM 模式：原子读取快照
     uint32_t snap_high_L, snap_period_L; bool snap_valid_L;
     uint32_t snap_high_R, snap_period_R; bool snap_valid_R;
     portENTER_CRITICAL(&enc_mux);
@@ -255,9 +421,18 @@ void steering_control_calibrate_and_save(void) {
     snap_period_R = enc_right.snap_period;
     snap_valid_R  = enc_right.snap_valid;
     portEXIT_CRITICAL(&enc_mux);
-
-    float cal_left  = compute_angle(snap_high_L, snap_period_L, snap_valid_L);
-    float cal_right = compute_angle(snap_high_R, snap_period_R, snap_valid_R);
+    cal_left  = compute_angle(snap_high_L, snap_period_L, snap_valid_L);
+    cal_right = compute_angle(snap_high_R, snap_period_R, snap_valid_R);
+#else
+    // SPI 模式：直接同步读取
+    bool vl, vr;
+    cal_left  = spi_read_encoder(spi_dev_left,  &vl);
+    cal_right = spi_read_encoder(spi_dev_right, &vr);
+    if (!vl || !vr) {
+        ESP_LOGE(TAG, "✗ 校准失败：编码器读取无效 (L=%d R=%d)，放弃本次校准", (int)vl, (int)vr);
+        return;
+    }
+#endif
 
     // 设置偏移使得初始竖直状态对应 180°（避免 0/360 边界抖动）
     offset_left  = cal_left  - 180.0f;
@@ -284,44 +459,38 @@ bool steering_control_is_calibrated(void) {
     return s_calibrated;
 }
 
-// 编码器超时阈值：正常周期 ~5ms~50ms，150ms 内无合法帧视为断线
+// 编码器超时阈值：正常周期 ~5ms~50ms，150ms 内无合法帧视为断线 (仅 PWM 模式)
 #define ENC_TIMEOUT_US  150000LL
 
 void steering_control_get_current_angles(float *left_deg, float *right_deg) {
-    // ===== 超时断线检测 =====
+    bool cur_left_valid, cur_right_valid;
+    float raw_left, raw_right;
+
+#if !ENC_USE_SPI
+    // ===== 超时断线检测 (PWM 模式) =====
     // ISR 断线后不再触发，bad_streak 永远不增，valid 永远停留 true。
     // 主动用时间戳判断：超过 150ms 无合法帧则主动置 valid=false，让 PID 停转。
     // 恢复时 ISR 好帧会重新置 valid=true，播种逻辑自动感知并重新播种。
+    //
+    // ⚠ 注意：不能在此处写 snap_valid！snap_valid 仅由 ISR 在临界区内写。
+    //   主任务在临界区外写 snap_valid=false，会与 ISR 在临界区内写 snap_valid=true 形成竞态：
+    //   若主任务的 false 覆盖了 ISR 刚写好的 true，下一帧 compute_angle() 收到 false 返回 0°，
+    //   经 offset 归一化后变成 ~180°，错误地播种 filtered_angle=180°，导致重连后位置突变。
     {
         int64_t now = esp_timer_get_time();
         if (enc_left.valid && enc_left.last_valid_us > 0 &&
             (now - enc_left.last_valid_us) > ENC_TIMEOUT_US) {
-            enc_left.valid     = false;
-            enc_left.snap_valid = false;
+            enc_left.valid = false;          // 仅改 valid，不碰 snap_*
             ESP_LOGW(TAG, "左编码器超时断线，停转保护");
         }
         if (enc_right.valid && enc_right.last_valid_us > 0 &&
             (now - enc_right.last_valid_us) > ENC_TIMEOUT_US) {
-            enc_right.valid     = false;
-            enc_right.snap_valid = false;
+            enc_right.valid = false;         // 仅改 valid，不碰 snap_*
             ESP_LOGW(TAG, "右编码器超时断线，停转保护");
         }
     }
-
-    // ===== valid 从 false 翻为 true 时，强制重新播种 =====
-    // 这个场景例如： boot 阶段编码器一直 invalid，filtered 在 180°；突然 valid=true 后
-    // 真实 raw 可能距 180 远远大于 40°，会被野值剔除永久卡住。
-    // 主动检测上一帧 valid 状态，发现恢复就清 seeded 让下面 seed 分支重新播种。
-    static bool prev_left_valid  = false;
-    static bool prev_right_valid = false;
-    if (enc_left.valid && !prev_left_valid) {
-        filtered_left_seeded = false;
-    }
-    if (enc_right.valid && !prev_right_valid) {
-        filtered_right_seeded = false;
-    }
-    prev_left_valid  = enc_left.valid;
-    prev_right_valid = enc_right.valid;
+    cur_left_valid  = enc_left.valid;
+    cur_right_valid = enc_right.valid;
 
     // 通过临界区原子读取 ISR 快照，避免读到 high_us/period_us 属于不同周期的数据
     uint32_t snap_high_L, snap_period_L; bool snap_valid_L;
@@ -335,11 +504,37 @@ void steering_control_get_current_angles(float *left_deg, float *right_deg) {
     snap_valid_R  = enc_right.snap_valid;
     portEXIT_CRITICAL(&enc_mux);
 
-    float raw_left  = compute_angle(snap_high_L, snap_period_L, snap_valid_L);
-    float raw_right = compute_angle(snap_high_R, snap_period_R, snap_valid_R);
-    
+    raw_left  = compute_angle(snap_high_L, snap_period_L, snap_valid_L);
+    raw_right = compute_angle(snap_high_R, snap_period_R, snap_valid_R);
+
+#else  // ENC_USE_SPI
+    // SPI 模式：同步读取，校验（OCF + 奇偶）失败自动标 invalid
+    raw_left  = spi_read_encoder(spi_dev_left,  &cur_left_valid);
+    raw_right = spi_read_encoder(spi_dev_right, &cur_right_valid);
+    spi_valid_left  = cur_left_valid;
+    spi_valid_right = cur_right_valid;
+    // 读取失败时保留上一拍滤波值，让野值剔除逻辑统一处理
+    if (!cur_left_valid)  raw_left  = filtered_angle_left  + offset_left;
+    if (!cur_right_valid) raw_right = filtered_angle_right + offset_right;
+#endif  // !ENC_USE_SPI
+
+    // ===== valid 从 false 翻为 true 时，强制重新播种 =====
+    // 这个场景例如： boot 阶段编码器一直 invalid，filtered 在 180°；突然 valid=true 后
+    // 真实 raw 可能距 180 远远大于 40°，会被野值剔除永久卡住。
+    // 主动检测上一帧 valid 状态，发现恢复就清 seeded 让下面 seed 分支重新播种。
+    static bool prev_left_valid  = false;
+    static bool prev_right_valid = false;
+    if (cur_left_valid && !prev_left_valid) {
+        filtered_left_seeded = false;
+    }
+    if (cur_right_valid && !prev_right_valid) {
+        filtered_right_seeded = false;
+    }
+    prev_left_valid  = cur_left_valid;
+    prev_right_valid = cur_right_valid;
+
     // 相对于初始校准点的角度
-    raw_left = raw_left - offset_left;
+    raw_left  = raw_left  - offset_left;
     raw_right = raw_right - offset_right;
 
     // 应用编码器方向反转开关（由 system_config.h 集中配置）
@@ -365,7 +560,7 @@ void steering_control_get_current_angles(float *left_deg, float *right_deg) {
 
     // 左
     {
-        if (enc_left.valid && !filtered_left_seeded) {
+        if (cur_left_valid && !filtered_left_seeded) {
             // 首次播种：跳过野值剔除，直接吃当前 raw 读数为初值
             filtered_angle_left = raw_left;
             filtered_left_seeded = true;
@@ -374,7 +569,7 @@ void steering_control_get_current_angles(float *left_deg, float *right_deg) {
             float d = raw_left - prev;
             while (d >  180.0f) d -= 360.0f;
             while (d < -180.0f) d += 360.0f;
-            if (!enc_left.valid || fabsf(d) > OUTLIER_DEG) {
+            if (!cur_left_valid || fabsf(d) > OUTLIER_DEG) {
                 raw_left = prev;   // 保留上一拍
             } else {
                 float upd = prev + LPF_ALPHA * d;
@@ -387,7 +582,7 @@ void steering_control_get_current_angles(float *left_deg, float *right_deg) {
     }
     // 右
     {
-        if (enc_right.valid && !filtered_right_seeded) {
+        if (cur_right_valid && !filtered_right_seeded) {
             filtered_angle_right = raw_right;
             filtered_right_seeded = true;
         } else {
@@ -395,7 +590,7 @@ void steering_control_get_current_angles(float *left_deg, float *right_deg) {
             float d = raw_right - prev;
             while (d >  180.0f) d -= 360.0f;
             while (d < -180.0f) d += 360.0f;
-            if (!enc_right.valid || fabsf(d) > OUTLIER_DEG) {
+            if (!cur_right_valid || fabsf(d) > OUTLIER_DEG) {
                 raw_right = prev;
             } else {
                 float upd = prev + LPF_ALPHA * d;
@@ -413,8 +608,13 @@ void steering_control_get_current_angles(float *left_deg, float *right_deg) {
 
 // 获取编码器健康状态
 void steering_control_get_encoder_status(bool *left_ok, bool *right_ok) {
-    *left_ok = enc_left.valid;
+#if !ENC_USE_SPI
+    *left_ok  = enc_left.valid;
     *right_ok = enc_right.valid;
+#else
+    *left_ok  = spi_valid_left;
+    *right_ok = spi_valid_right;
+#endif
 }
 
 // 提取单边 PID 计算
@@ -496,8 +696,13 @@ void steering_control_update(void) {
     // 若不在这里拦截，PID 会按冻结的角度持续喷 PWM，360° 连续舵机会
     // 一路狂转过冲一整圈（实测 270→90 多走 360° = 540°）。
     // 失效时直接 PWM=1500（舵机不转），同时复位该侧 PID 状态，避免恢复后积分爆发。
+#if !ENC_USE_SPI
     bool enc_l_ok = enc_left.valid;
     bool enc_r_ok = enc_right.valid;
+#else
+    bool enc_l_ok = spi_valid_left;
+    bool enc_r_ok = spi_valid_right;
+#endif
 
     // 线性误差（不做 ±180° 环形折叠），确保舵机始终沿 [80°, 280°] 弧内运动。
     // 若用 shortest_angle_error：当 target 与 cur 相距 >180°（如 82° vs 278°），
