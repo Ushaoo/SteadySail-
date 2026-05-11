@@ -17,6 +17,7 @@
 #include "blinker_bridge.h"
 #include "bno055_driver.h"
 #include "rc_input.h"
+#include "driver/gpio.h"
 
 static const char *TAG = "MAIN";
 
@@ -45,6 +46,8 @@ volatile bool g_estop_active = false;
 //   与 g_estop_active 的区别：后者仍会跟 180° 舵机目标 (连续舵 1500us 才是"不转")。
 volatile bool g_hard_estop = false;
 
+// 磁控重启标志：磁铁重新吸合（上升沿）时由 ISR 置位，由 control_core_task 检测后重启
+volatile bool g_mag_restart_pending = false;
 // IMU 专用测试任务 (100Hz)
 void imu_test_task(void *pvParameters) {
     dual_imu_data_t imu_data;
@@ -257,14 +260,42 @@ void control_core_task(void *pvParameters) {
     static float last_thrust_motor_L = 0.0f;
     static float last_thrust_motor_R = 0.0f;
 
+    // 用于硬急停首次触发时打印一次日志（避免 ISR 内调日志）
+    static bool s_hard_estop_logged = false;
+    // 恢复检测：GPIO 稳定回到非急停电平的连续帧数（50帧×10ms = 500ms）
+    static int  s_recovery_count    = 0;
+
     while (1) {
         // ====== 硬急停（最高优先级，直接压 4 路 PWM = 1500us）======
         if (g_hard_estop) {
-            motor_control_emergency_stop();          // 两个 ESC
+            // 首次进入时打印一次，后续循环不重复刷屏
+            if (!s_hard_estop_logged) {
+                ESP_LOGE(TAG, "⛔ 磁控开关断开！硬急停已激活，所有输出锁定 1500µs");
+                s_hard_estop_logged = true;
+            }
+
+            motor_control_emergency_stop();             // 两个 ESC
             motor_control_set_steering_pwm(1500, 1500); // 两个舵机
+
+            // 恢复检测：轮询 GPIO，非急停电平持续 500ms 才视为磁铁真正吸合
+            // （不依赖 ISR 边沿，彻底规避触点抖动和开关类型差异）
+            if (gpio_get_level((gpio_num_t)PIN_MAG_ESTOP) != MAG_ESTOP_TRIGGER_LEVEL) {
+                if (++s_recovery_count >= 50) {
+                    ESP_LOGW(TAG, "✅ 磁控开关重新吸合，1s 后重启...");
+                    vTaskDelay(pdMS_TO_TICKS(1000));
+                    esp_restart();
+                }
+            } else {
+                s_recovery_count = 0;  // 电平不稳，重新计数
+            }
+
             vTaskDelayUntil(&xLastWakeTime, xFrequency);
             continue;
         }
+
+        // 硬急停解除后重置计数（正常情况下不会走到这里，除非手动清 g_hard_estop）
+        s_hard_estop_logged = false;
+        s_recovery_count    = 0;
 
         // ====== 急停检查（高优先级，遥控触发）======
         if (g_estop_active) {
@@ -755,6 +786,44 @@ void control_core_task(void *pvParameters) {
     }
 }
 
+// ====== 磁控急停 ISR + 初始化 ======
+// ISR 职责只有一个：检测到急停触发电平时立即设置 g_hard_estop。
+// 恢复检测（吸合→重启）完全在任务内轮询，不依赖边沿方向，彻底避免
+// 触点抖动和开关类型（NO/NC）造成的误判。
+//
+// 触发电平由 system_config.h 中 MAG_ESTOP_TRIGGER_LEVEL 决定：
+//   NO 型（磁铁在位=触点闭合=LOW，移走=触点断开=HIGH）→ 设 1
+//   NC 型（磁铁在位=触点断开=HIGH，移走=触点闭合=LOW）→ 设 0
+static void IRAM_ATTR mag_estop_isr(void *arg)
+{
+    if (gpio_get_level((gpio_num_t)PIN_MAG_ESTOP) == MAG_ESTOP_TRIGGER_LEVEL) {
+        g_hard_estop = true;
+    }
+}
+
+static void mag_estop_init(void)
+{
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << PIN_MAG_ESTOP),
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,    // 内部上拉，无需外部电阻
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_ANYEDGE,     // 任意边沿均检查电平
+    };
+    gpio_config(&io_conf);
+
+    // ISR service 可能已由 rc_input_init / steering_control_init 安装，
+    // 返回 ESP_ERR_INVALID_STATE 表示已安装，属正常，直接继续。
+    esp_err_t err = gpio_install_isr_service(0);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "mag_estop: ISR service 安装失败 (%s)", esp_err_to_name(err));
+        return;
+    }
+    gpio_isr_handler_add((gpio_num_t)PIN_MAG_ESTOP, mag_estop_isr, NULL);
+    ESP_LOGI(TAG, "磁控急停已初始化 GPIO%d (触发电平=%d，移走→硬急停，吸合→重启)",
+             PIN_MAG_ESTOP, MAG_ESTOP_TRIGGER_LEVEL);
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "SteadySail Version 2 - Dual IMU + Vector Thrust");
@@ -776,7 +845,10 @@ void app_main(void)
     // 2. 初始化 RC 油门 PWM 输入（GPIO PIN_RC_THROTTLE）
     rc_input_init(PIN_RC_THROTTLE);  // 失败仅打印警告，不中断启动
 
-    // 3. 初始化 BNO055（I2C0，GPIO 8/9，考接 MPU6050 原接口）
+    // 3. 初始化磁控急停（NC 干簧管，GPIO PIN_MAG_ESTOP；内部上拉，下降沿触发）
+    mag_estop_init();
+
+    // 4. 初始化 BNO055（I2C0，GPIO 8/9，考接 MPU6050 原接口）
     //    USE_BNO055_FOR_ROLL=1 时：BNO055 同时负责 Roll 平衡与航向保持；=0 时仅用于航向保持
     if (bno055_init() != ESP_OK) {
 #if USE_BNO055_FOR_ROLL

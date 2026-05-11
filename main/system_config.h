@@ -72,6 +72,14 @@
 // 标准 RC PWM: 1000~2000μs, 1500μs=中位; 接收机信号线 → GPIO 7
 #define PIN_RC_THROTTLE  7
 
+// --- 磁控急停输入 (干簧管) ---
+// 接线：干簧管一端接 GND，另一端接此 GPIO（内部上拉至 3.3V，无需外部电阻）
+// 触发电平（MAG_ESTOP_TRIGGER_LEVEL）：
+//   NO 型（磁铁在位=触点闭合=LOW，移走=触点断开=HIGH）→ 设 1  ← 常见普通干簧管
+//   NC 型（磁铁在位=触点断开=HIGH，移走=触点闭合=LOW）→ 设 0  ← 故障安全型
+#define PIN_MAG_ESTOP           12
+#define MAG_ESTOP_TRIGGER_LEVEL  1   // 1=HIGH触发(NO型)  0=LOW触发(NC型)
+
 
 // ==========================================
 // 3. IMU 配置开关 (单/双 IMU 切换)
