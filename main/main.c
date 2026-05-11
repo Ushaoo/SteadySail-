@@ -257,10 +257,6 @@ void control_core_task(void *pvParameters) {
     static float last_thrust_motor_L = 0.0f;
     static float last_thrust_motor_R = 0.0f;
 
-    // 保存最后的平衡参数用于显示
-    static float last_tau_total = 0.0f;
-    static float last_V_balance = 0.0f;
-
     while (1) {
         // ====== 硬急停（最高优先级，直接压 4 路 PWM = 1500us）======
         if (g_hard_estop) {
@@ -440,8 +436,6 @@ void control_core_task(void *pvParameters) {
                     last_thrust_motor_L = 0.0f;
                     last_thrust_motor_R = 0.0f;
 
-                    last_tau_total = state.tau_total;
-                    last_V_balance = fabsf(dV);
                     goto control_loop_tail;  // 跳过下面的 V3 + Scheme A 路径
                 }
 
@@ -649,10 +643,6 @@ void control_core_task(void *pvParameters) {
 
                 motor_control_set_pwm_bidirectional(thrust_motor_L, thrust_motor_R, false, false);
 
-                // 保存显示用
-                last_tau_total = state.tau_total;
-                last_V_balance = fabsf(dV);
-
             control_loop_tail: ;  // 特殊路径（fwd≈0，纯反转模式）跳到这里
             }
         } else {
@@ -716,9 +706,11 @@ void control_core_task(void *pvParameters) {
         // 串口实时数据监测 (每 10 帧打一条，10Hz)
         static int print_cnt = 0;
         if (++print_cnt >= 10) { 
-            // 获取实际下发的 PWM 脉宽
+            // 获取实际下发的 PWM 脉宽（大电机 & 舵机）
             uint32_t actual_pwm_L, actual_pwm_R;
             motor_control_get_last_pwm(&actual_pwm_L, &actual_pwm_R);
+            uint32_t steer_pwm_L, steer_pwm_R;
+            motor_control_get_last_steer_pwm(&steer_pwm_L, &steer_pwm_R);
 
             // 显示用的 Tgt = 真实下发给 PID 的目标角（编码器系），
             // 与 Act（编码器读数）同参考系，收敛后两者一致。
@@ -727,12 +719,26 @@ void control_core_task(void *pvParameters) {
 
             float dbg_heading = 0.0f;
             bno055_get_heading(&dbg_heading);
-            printf("Fwd:%.1f%%%s | TgtL:%.1f (Act:%.1f) | TgtR:%.1f (Act:%.1f) | Roll:%.2f | Hdg:%.1f%s | PWM_L:%u PWM_R:%u | Tau:%.0f dV:%.0f | Enc:%s/%s\n",
-                   g_forward_thrust, rc_input_is_cruising() ? "(CRZ)" : "",
-                   disp_tgt_L, cur_steer_left, disp_tgt_R, cur_steer_right,
-                   state.roll_deg, dbg_heading, g_heading_hold_active ? "(HOLD)" : "",
-                   actual_pwm_L, actual_pwm_R, last_tau_total, last_V_balance,
-                   enc_left_fault ? "X" : "✓", enc_right_fault ? "X" : "✓");
+
+            if (rc_input_is_cruising() && g_heading_hold_active) {
+                // 定速 + 定向：额外显示航向目标→当前
+                printf("Fwd:%.1f%%(CRZ) | L:%.1f\u2192%.1f | R:%.1f\u2192%.1f | SteerPWM:%u/%u | MotorPWM:%u/%u | Roll:%.2f\u00b0 | Hdg:%.1f\u00b0\u2192%.1f\u00b0(HOLD) | EncL:%s EncR:%s\n",
+                       g_forward_thrust,
+                       disp_tgt_L, cur_steer_left, disp_tgt_R, cur_steer_right,
+                       steer_pwm_L, steer_pwm_R,
+                       actual_pwm_L, actual_pwm_R,
+                       state.roll_deg,
+                       g_target_heading, dbg_heading,
+                       enc_left_fault ? "X" : "\u2713", enc_right_fault ? "X" : "\u2713");
+            } else {
+                printf("Fwd:%.1f%%%s | L:%.1f\u2192%.1f | R:%.1f\u2192%.1f | SteerPWM:%u/%u | MotorPWM:%u/%u | Roll:%.2f\u00b0 | Hdg:%.1f\u00b0 | EncL:%s EncR:%s\n",
+                       g_forward_thrust, rc_input_is_cruising() ? "(CRZ)" : "",
+                       disp_tgt_L, cur_steer_left, disp_tgt_R, cur_steer_right,
+                       steer_pwm_L, steer_pwm_R,
+                       actual_pwm_L, actual_pwm_R,
+                       state.roll_deg, dbg_heading,
+                       enc_left_fault ? "X" : "\u2713", enc_right_fault ? "X" : "\u2713");
+            }
             print_cnt = 0;
         }
 

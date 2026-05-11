@@ -68,9 +68,11 @@ static spi_device_handle_t spi_dev_right = NULL;
 // SPI 模式下编码器有效状态（上次读取结果）
 static bool spi_valid_left  = false;
 static bool spi_valid_right = false;
-// init 时是否检测到编码器实际存在（未接线的侧永远不读取，避免浮空 MISO 乱跳）
+// init 期间已经至少读到一次有效数据（独立追踪左右）
 static bool spi_present_left  = false;
 static bool spi_present_right = false;
+// init 完成标志：init 过程中不应用 spi_present 过滤
+static bool spi_init_done = false;
 
 #endif  // !ENC_USE_SPI
 
@@ -80,14 +82,7 @@ static float target_right = 180.0f;
 // 编码器初始校准偏移值
 static float offset_left = 0.0f;
 static float offset_right = 0.0f;
-// 编码器滤波缓存（简单直通）
-static float filtered_angle_left = 180.0f;
-static float filtered_angle_right = 180.0f;
-// 首次播种标志：true 时野值过滤暂停，第一拍合法读数直接覆盖 filtered_angle_*。
-// 解决开机时舵机不在 180° 也被卡死显示 180° 的问题（diff>40° 永远被野值剔除）。
-// 校准 / NVS 加载后会重置为 false，触发重新播种。
-static bool filtered_left_seeded  = false;
-static bool filtered_right_seeded = false;
+
 
 // 是否已经完成"竖直 → 180°"校准（NVS 加载成功 或 用户手动触发过）
 static bool s_calibrated = false;
@@ -185,15 +180,10 @@ static float compute_angle(volatile uint32_t high_us, volatile uint32_t period_u
 // 角度公式：θ = ANGLE[14:0] / 32768 * 360°  (15-bit，数据手册 Section 8.6.7)
 static float spi_read_encoder(spi_device_handle_t dev, bool *valid_out) {
     if (dev == NULL) { *valid_out = false; return -1.0f; }
-    // 未接线的编码器（init 时从未 valid）：直接跳过 SPI 事务，避免浮空 MISO 乱跳
-    // 注意：spi_present_* 在第一次调用（init 轮询）时尚未赋值，此时允许正常读取
-    if (dev == spi_dev_left  && spi_dev_left  != NULL && !spi_present_left
-        && (spi_valid_left || spi_valid_right)) { // init 完成后才生效
-        *valid_out = false; return -1.0f;
-    }
-    if (dev == spi_dev_right && spi_dev_right != NULL && !spi_present_right
-        && (spi_valid_left || spi_valid_right)) {
-        *valid_out = false; return -1.0f;
+    // init 完成后，如果该侧编码器在 init 期间从未有过有效读数，则表明没有连接，直接跳过
+    if (spi_init_done) {
+        if (dev == spi_dev_left  && !spi_present_left)  { *valid_out = false; return -1.0f; }
+        if (dev == spi_dev_right && !spi_present_right) { *valid_out = false; return -1.0f; }
     }
 
     static const uint8_t tx_buf[6] = {0xA0, 0x03, 0x00, 0x00, 0x00, 0x00};
@@ -212,13 +202,23 @@ static float spi_read_encoder(spi_device_handle_t dev, bool *valid_out) {
     uint8_t angle_l = rx_buf[3];        // ANGLE[6:0] in bits[7:1], bit0 固定 0
     uint8_t status  = rx_buf[4] & 0x07; // STATUS[2:0]
 
-    // 诊断打印：每隔 200 次打印一次（约 2s @ 100Hz）
-    static int dbg_cnt = 0;
-    if (++dbg_cnt >= 200) {
-        dbg_cnt = 0;
-        uint16_t raw15 = ((uint16_t)angle_h << 7) | (angle_l >> 1);
-        ESP_LOGI(TAG, "[ENC SPI] angle_h=%02X angle_l=%02X STATUS=%d raw15=%u",
-                 angle_h, angle_l, status, raw15);
+    // 诊断打印：左右各自计数，避免混淆
+    if (dev == spi_dev_left) {
+        static int dbg_l = 0;
+        if (++dbg_l >= 200) {
+            dbg_l = 0;
+            uint16_t raw15 = ((uint16_t)angle_h << 7) | (angle_l >> 1);
+            ESP_LOGI(TAG, "[ENC L] h=%02X l=%02X STATUS=%d raw15=%u angle=%.1f",
+                     angle_h, angle_l, status, raw15, raw15 / 32768.0f * 360.0f);
+        }
+    } else {
+        static int dbg_r = 0;
+        if (++dbg_r >= 200) {
+            dbg_r = 0;
+            uint16_t raw15 = ((uint16_t)angle_h << 7) | (angle_l >> 1);
+            ESP_LOGI(TAG, "[ENC R] h=%02X l=%02X STATUS=%d raw15=%u angle=%.1f",
+                     angle_h, angle_l, status, raw15, raw15 / 32768.0f * 360.0f);
+        }
     }
 
     // STATUS[1]=1: 磁场过弱；STATUS[2]=1: 供电欠压 → 数据不可信
@@ -349,27 +349,29 @@ void steering_control_init(void) {
 
     // SPI 上电后等待 MT6826S OCF 就绪（通常 < 50ms）
     {
-        ESP_LOGI(TAG, "等待编码器 OCF 就绪 (最多 500ms)...");
+        ESP_LOGI(TAG, "等待编码器就绪 (最多 500ms)...");
         TickType_t t0 = xTaskGetTickCount();
         const TickType_t TIMEOUT = pdMS_TO_TICKS(500);
-        bool init_vl = false, init_vr = false;
+        // 左右独立追踪「是否曾经读到过有效值」，避免右侧未接导致左侧超时被错误标记为不存在
+        bool ever_vl = false, ever_vr = false;
         while (true) {
-            spi_read_encoder(spi_dev_left,  &init_vl);
-            spi_read_encoder(spi_dev_right, &init_vr);
-            if (init_vl && init_vr) {
-                ESP_LOGI(TAG, "✓ 两侧编码器均就绪 (耗时 %d ms)",
-                         (int)((xTaskGetTickCount() - t0) * portTICK_PERIOD_MS));
-                break;
-            }
-            if (xTaskGetTickCount() - t0 > TIMEOUT) {
-                ESP_LOGW(TAG, "⚠ 编码器 500ms 超时: L=%d R=%d", (int)init_vl, (int)init_vr);
-                break;
-            }
+            bool vl, vr;
+            spi_read_encoder(spi_dev_left,  &vl);
+            spi_read_encoder(spi_dev_right, &vr);
+            if (vl) ever_vl = true;
+            if (vr) ever_vr = true;
+            if ((ever_vl && ever_vr) || xTaskGetTickCount() - t0 > TIMEOUT) break;
             vTaskDelay(pdMS_TO_TICKS(10));
         }
-        // 记录哪侧编码器实际存在（超时后未曾 valid 的侧视为未接线，后续跳过读取）
-        spi_present_left  = init_vl;
-        spi_present_right = init_vr;
+        if (xTaskGetTickCount() - t0 > TIMEOUT) {
+            ESP_LOGW(TAG, "⚠ 编码器 500ms 超时: L=%d R=%d", (int)ever_vl, (int)ever_vr);
+        } else {
+            ESP_LOGI(TAG, "✓ 两侧编码器均就绪");
+        }
+        // 记录哪侧连接了（不依赖最后一次读取结果，而是「幦是否曾有过」）
+        spi_present_left  = ever_vl;
+        spi_present_right = ever_vr;
+        spi_init_done = true;
         ESP_LOGI(TAG, "编码器在线: L=%d R=%d", (int)spi_present_left, (int)spi_present_right);
     }
 #endif  // !ENC_USE_SPI
@@ -379,10 +381,6 @@ void steering_control_init(void) {
     if (nvs_load_offsets(&loaded_l, &loaded_r) == ESP_OK) {
         offset_left  = loaded_l;
         offset_right = loaded_r;
-        filtered_angle_left  = 180.0f;  // 临时占位，首拍 get_current_angles() 会用真实读数覆盖
-        filtered_angle_right = 180.0f;
-        filtered_left_seeded  = false;  // 强制首拍播种
-        filtered_right_seeded = false;
         s_calibrated = true;
         ESP_LOGI(TAG, "✓ 已从 NVS 加载校准: offset_L=%.2f° offset_R=%.2f°", offset_left, offset_right);
     } else {
@@ -437,12 +435,6 @@ void steering_control_calibrate_and_save(void) {
     // 设置偏移使得初始竖直状态对应 180°（避免 0/360 边界抖动）
     offset_left  = cal_left  - 180.0f;
     offset_right = cal_right - 180.0f;
-
-    // 初始化滤波缓存（校准刚完成，舵机一定在 180° 物理位）
-    filtered_angle_left  = 180.0f;
-    filtered_angle_right = 180.0f;
-    filtered_left_seeded  = true;
-    filtered_right_seeded = true;
 
     s_calibrated = true;
     ESP_LOGI(TAG, "Encoder Calibration Complete. Offset Left: %.2f°, Offset Right: %.2f°", offset_left, offset_right);
@@ -508,30 +500,55 @@ void steering_control_get_current_angles(float *left_deg, float *right_deg) {
     raw_right = compute_angle(snap_high_R, snap_period_R, snap_valid_R);
 
 #else  // ENC_USE_SPI
-    // SPI 模式：同步读取，校验（OCF + 奇偶）失败自动标 invalid
-    raw_left  = spi_read_encoder(spi_dev_left,  &cur_left_valid);
-    raw_right = spi_read_encoder(spi_dev_right, &cur_right_valid);
-    spi_valid_left  = cur_left_valid;
-    spi_valid_right = cur_right_valid;
-    // 读取失败时保留上一拍滤波值，让野值剔除逻辑统一处理
-    if (!cur_left_valid)  raw_left  = filtered_angle_left  + offset_left;
-    if (!cur_right_valid) raw_right = filtered_angle_right + offset_right;
-#endif  // !ENC_USE_SPI
+    // SPI 模式：同步读取
+    bool raw_left_valid, raw_right_valid;
+    raw_left  = spi_read_encoder(spi_dev_left,  &raw_left_valid);
+    raw_right = spi_read_encoder(spi_dev_right, &raw_right_valid);
 
-    // ===== valid 从 false 翻为 true 时，强制重新播种 =====
-    // 这个场景例如： boot 阶段编码器一直 invalid，filtered 在 180°；突然 valid=true 后
-    // 真实 raw 可能距 180 远远大于 40°，会被野值剔除永久卡住。
-    // 主动检测上一帧 valid 状态，发现恢复就清 seeded 让下面 seed 分支重新播种。
-    static bool prev_left_valid  = false;
-    static bool prev_right_valid = false;
-    if (cur_left_valid && !prev_left_valid) {
-        filtered_left_seeded = false;
+    // 去抖：单次坏帧（EMI 偶发 STATUS≠0 / 磁铁高速旋转短暂弱场）不立即报 invalid，
+    // 需连续 SPI_FAIL_THRESH 次失败才翻转 spi_valid_*，
+    // 恢复时只要一次成功即立即恢复（不对称设计：快恢复、慢报警）。
+    // 20帧 = 200ms @ 100Hz：足以覆盖高速旋转时短暂弱场，真正断线需持续 >200ms 才报警
+    // 对称去抖：
+    //   断线：连续 SPI_FAIL_THRESH 次失败 → spi_valid=false（慢报警，抗偶发坏帧）
+    //   重连：连续 SPI_GOOD_THRESH 次成功 → spi_valid=true （慢恢复，防单帧噪声误触发）
+    // 不对称的旧设计（断线慢/重连快）会导致：20坏帧→停→1好帧→立刻重启PID→角度激变→循环。
+    #define SPI_FAIL_THRESH 20
+    #define SPI_GOOD_THRESH  5
+    static uint8_t fail_l = 0, fail_r = 0;
+    static uint8_t good_l = 0, good_r = 0;
+    if (raw_left_valid) {
+        fail_l = 0;
+        if (++good_l >= SPI_GOOD_THRESH) {
+            good_l = SPI_GOOD_THRESH;   // 防溢出
+            spi_valid_left = true;
+        }
+    } else {
+        good_l = 0;
+        if (++fail_l >= SPI_FAIL_THRESH) {
+            fail_l = SPI_FAIL_THRESH;   // 防溢出
+            spi_valid_left = false;
+        }
     }
-    if (cur_right_valid && !prev_right_valid) {
-        filtered_right_seeded = false;
+    if (raw_right_valid) {
+        fail_r = 0;
+        if (++good_r >= SPI_GOOD_THRESH) {
+            good_r = SPI_GOOD_THRESH;
+            spi_valid_right = true;
+        }
+    } else {
+        good_r = 0;
+        if (++fail_r >= SPI_FAIL_THRESH) {
+            fail_r = SPI_FAIL_THRESH;
+            spi_valid_right = false;
+        }
     }
-    prev_left_valid  = cur_left_valid;
-    prev_right_valid = cur_right_valid;
+    // 角度更新门控：同时满足「去抖稳定」AND「本帧原始有效」。
+    // 重连去抖窗口内（good < 5）spi_valid=false → last_* 不更新，
+    // 防止单帧噪声角度在恢复瞬间写入 last_* 引发读数激变。
+    cur_left_valid  = spi_valid_left  && raw_left_valid;
+    cur_right_valid = spi_valid_right && raw_right_valid;
+#endif  // !ENC_USE_SPI
 
     // 相对于初始校准点的角度
     raw_left  = raw_left  - offset_left;
@@ -552,58 +569,13 @@ void steering_control_get_current_angles(float *left_deg, float *right_deg) {
     while (raw_right < 0.0f) raw_right += 360.0f;
     while (raw_right >= 360.0f) raw_right -= 360.0f;
 
-    // ===== 方案 E：野值剔除 + 一阶 LPF =====
-    // 100Hz 调用，舵机最快 ~360°/s -> 单拍 ≤ 3.6°；任何 >40° 的瞬时跳变视为 EMI 假读，
-    // 保留上一拍 filtered 值，绝不让 PID 看到 0° 或瞬间翻转。
-    const float OUTLIER_DEG = 40.0f;
-    const float LPF_ALPHA   = 0.35f;   // 截止 ~5Hz @ 100Hz
-
-    // 左
-    {
-        if (cur_left_valid && !filtered_left_seeded) {
-            // 首次播种：跳过野值剔除，直接吃当前 raw 读数为初值
-            filtered_angle_left = raw_left;
-            filtered_left_seeded = true;
-        } else {
-            float prev = filtered_angle_left;
-            float d = raw_left - prev;
-            while (d >  180.0f) d -= 360.0f;
-            while (d < -180.0f) d += 360.0f;
-            if (!cur_left_valid || fabsf(d) > OUTLIER_DEG) {
-                raw_left = prev;   // 保留上一拍
-            } else {
-                float upd = prev + LPF_ALPHA * d;
-                while (upd < 0.0f)    upd += 360.0f;
-                while (upd >= 360.0f) upd -= 360.0f;
-                filtered_angle_left = upd;
-                raw_left = upd;
-            }
-        }
-    }
-    // 右
-    {
-        if (cur_right_valid && !filtered_right_seeded) {
-            filtered_angle_right = raw_right;
-            filtered_right_seeded = true;
-        } else {
-            float prev = filtered_angle_right;
-            float d = raw_right - prev;
-            while (d >  180.0f) d -= 360.0f;
-            while (d < -180.0f) d += 360.0f;
-            if (!cur_right_valid || fabsf(d) > OUTLIER_DEG) {
-                raw_right = prev;
-            } else {
-                float upd = prev + LPF_ALPHA * d;
-                while (upd < 0.0f)    upd += 360.0f;
-                while (upd >= 360.0f) upd -= 360.0f;
-                filtered_angle_right = upd;
-                raw_right = upd;
-            }
-        }
-    }
-
-    *left_deg = raw_left;
-    *right_deg = raw_right;
+    // 无效帧冻结：保持上一次有效角度，防止 PID 在去抖窗口内看到乱值
+    static float last_left  = 180.0f;
+    static float last_right = 180.0f;
+    if (cur_left_valid)  last_left  = raw_left;
+    if (cur_right_valid) last_right = raw_right;
+    *left_deg  = last_left;
+    *right_deg = last_right;
 }
 
 // 获取编码器健康状态
