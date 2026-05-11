@@ -127,9 +127,22 @@
 #define STEER_LEFT_INVERT      1    // 0=正常, 1=反转左舵机 PWM 方向
 #define STEER_RIGHT_INVERT     1    // 0=正常, 1=反转右舵机 PWM 方向
 
-#define ENC_LEFT_REVERSE       0    // 0=正常, 1=反转左编码器读数0
+#define ENC_LEFT_REVERSE       0    // 0=正常, 1=反转左编码器读数（angle = 360 - angle）
+#define ENC_RIGHT_REVERSE      1    // 0=正常, 1=反转右编码器读数（angle = 360 - angle）
 
-#define ENC_RIGHT_REVERSE      1    // 0=正常, 1=反转右编码器读数
+// --- 目标角镜像开关（对下发给 steering_control 前的目标角做 360- 翻转）---
+//   每侧分两层，分别控制：
+//     STEER_SEND_*_REVERSE  : main.c 中 send_tgt_L/R 的 360- 翻转
+//                             （当前均为 1：物理装配镜像，L/R 互换后再各做一次 360-）
+//     STEER_TARGET_*_REVERSE: steering_control_set_target() 内部的 360- 翻转
+//                             （当前左=0/右=1：历史遗留，与 SEND 层"双重抵消"得到正确角）
+//
+//   验证方法：target=180°时舵机应停在中立位；target偏大/小时应朝对应方向转。
+//   若方向反了 → 先切换 STEER_TARGET_*，再切 STEER_SEND_* 微调。
+#define STEER_SEND_LEFT_REVERSE    1    // main.c: send_tgt_L = 360 - filter_target_R
+#define STEER_SEND_RIGHT_REVERSE   1    // main.c: send_tgt_R = 360 - filter_target_L
+#define STEER_TARGET_LEFT_REVERSE  0    // steering_control: target_left  镜像
+#define STEER_TARGET_RIGHT_REVERSE 1    // steering_control: target_right 镜像
 
 // ==========================================
 // 4.5 差速转向参数（仅在 g_forward_thrust > TURN_MIN_FWD_PCT 时启用）

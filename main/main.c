@@ -565,8 +565,16 @@ void control_core_task(void *pvParameters) {
                 // ⚠ 实测：左右物理装配相对算法是镜像的，此处把 L/R 整组互换下发
                 //    互换后角度公式语义也跟着反了，所以再绕 180° 镜像一次（360 - x）
                 //    [80, 280] 区间关于 180° 中心对称，360-x 仍落在 [80, 280]。
+#if STEER_SEND_LEFT_REVERSE
                 float send_tgt_L = 360.0f - filter_target_R;
+#else
+                float send_tgt_L = filter_target_R;
+#endif
+#if STEER_SEND_RIGHT_REVERSE
                 float send_tgt_R = 360.0f - filter_target_L;
+#else
+                float send_tgt_R = filter_target_L;
+#endif
                 // 安全夹制（双保险，浮点误差不会越界）
                 if (send_tgt_L < 80.0f)  send_tgt_L = 80.0f;
                 if (send_tgt_L > 280.0f) send_tgt_L = 280.0f;

@@ -391,13 +391,20 @@ void steering_control_init(void) {
 }
 
 void steering_control_set_target(float target_left_deg, float target_right_deg) {
-    // 注意：右侧做了 360- 翻转，这是历史遗留——与 main.c 中
-    //   send_tgt_R = 360 - filter_target_L
+    // 注意：STEER_TARGET_RIGHT_REVERSE 与 main.c 中 STEER_SEND_RIGHT_REVERSE
     // 的镜像"双重抵消"后，PID 才能让右舵机走到正确位置。
     // 任何调用者都要意识到：写入的 R 值与读出的 R 值 (get_target) 不是同一帧。
     // 门控判据必须使用 get_target() 的返回值，而不是写入的原始 send_tgt_R。
+#if STEER_TARGET_LEFT_REVERSE
+    target_left  = 360.0f - target_left_deg;
+#else
     target_left  = target_left_deg;
+#endif
+#if STEER_TARGET_RIGHT_REVERSE
     target_right = 360.0f - target_right_deg;
+#else
+    target_right = target_right_deg;
+#endif
 }
 void steering_control_get_target(float *left_deg, float *right_deg) {
     if (left_deg)  *left_deg  = target_left;
