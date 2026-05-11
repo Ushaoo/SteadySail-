@@ -13,19 +13,22 @@
 
 ## 1. 项目概览
 
-SteadySail 是一个基于 ESP32-S3 的双推进器 + 双矢量舵机姿态稳定控制系统。当前实现采用：
+SteadySail 是一个基于 ESP32-S3 的双推进器 + 双矢量舵机姿态稳定控制系统，目标是在帆船/小艇上实现自动横滚稳定与航向保持。当前实现采用：
 
 - 主循环 100 Hz（10 ms 固定周期）
-- MPU6050 IMU（默认单 IMU，可切换双 IMU）
-- MT6826S PWM 编码器采样矢量舵机角度
-- LEDC 50 Hz 14-bit PWM 驱动转向舵机与推进 ESC
-- Mahony 四元数姿态融合 + 启动 IMU 零位归零
-- V3 矢量分解控制律（竖直分量反相、水平分量同相、电机不反转）
-- 推进–舵机响应耦合：舵机就绪门控（Scheme A）
+- **BNO055** IMU（片上 NDOF 融合，绝对横滚 + 绝对偏航，无积分漂移）
+- MT6826S 磁编码器 **SPI 模式**（两路独立 CS，抗 EMI，2 MHz）
+- LEDC 50 Hz 14-bit PWM 驱动转向舵机（小电机）与推进 ESC（大电机）
+- V3 矢量分解控制律：竖直分量反相、水平分量同相、**电机始终同向不反转**
+- H=0 静止平衡路径：无前进推力时舵机锁 180°，双电机正反转产生上下力差
+- 差速转向：左右水平分量差（`TURN_DELTA_H`）驱动偏航
+- **航向保持**：BNO055 绝对偏航角 PI 控制，RC 定速时自动锁定航向
+- RC 遥控输入（标准 1000–2000 µs PWM）+ **定速巡航**（拨杆保持 2 s 后松手定速）
 - NVS 持久化舵机零点校准（一次校准、永久保存）
 - Blinker IoT 双向遥控 + 串口命令双通道
+- 双级急停：软急停（`g_estop_active`）+ 硬急停（`g_hard_estop`，直接压 1500 µs）
 
-核心目标：在给定前进推力的同时维持横滚稳定，并允许通过 App / 串口实时干预。
+核心目标：在给定前进推力的同时维持横滚稳定，并允许通过 App / 串口 / RC 遥控实时干预。
 
 ---
 
@@ -38,41 +41,56 @@ SteadySail 是一个基于 ESP32-S3 的双推进器 + 双矢量舵机姿态稳�
   - `main.c`、`imu_driver.c`、`balance_controller.c`
   - `motor_control.c`、`steering_control.c`
   - `control_params.c`、`blinker_bridge.c`
+  - `bno055_driver.c`、`rc_input.c`
 
 ### 主功能模块（`main/`）
 
 - [main.c](main/main.c)
   - 系统初始化、按模式分发任务
-  - 100 Hz `control_core_task`：V3 矢量控制 + 舵机就绪门控 + 安全保护
+  - 100 Hz `control_core_task`：V3 矢量控制 + H=0 静止路径 + 差速转向 + 航向保持 + 安全保护
+  - RC 输入读取（`rc_input_get_throttle()`），定速巡航激活时同步锁定航向
   - 串口命令解析（`w/s/space/数字/r/f/cal`）
 - [system_config.h](main/system_config.h)
   - 运行模式、转向控制模式
-  - GPIO 映射
-  - PWM 安全限幅、方向反转开关
-  - 控制参数与安全保护开关
+  - GPIO 映射（I2C/SPI/PWM 输入输出/RC 输入）
+  - PWM 安全限幅、方向反转开关、目标角镜像开关
+  - 差速转向参数（`TURN_DELTA_H`、`TURN_MIN_FWD_PCT`）
+  - 航向保持 PID 参数（`HEADING_KP`、`HEADING_KI`）
+  - 安全保护与控制基础参数
+- [bno055_driver.c](main/bno055_driver.c) / [.h](main/bno055_driver.h)
+  - BNO055 I2C 驱动（NDOF 融合模式，I2C0 GPIO 8/9）
+  - 读取 Roll（横滚）、偏航（Heading 0~360°，磁北参考）、X 轴角速度
 - [imu_driver.c](main/imu_driver.c) / [.h](main/imu_driver.h)
-  - I2C 初始化、MPU6050 唤醒与读取
-  - 单/双 IMU 数据输出统一接口
+  - MPU6050 备用驱动（当 `USE_BNO055_FOR_ROLL=0` 时启用）
+  - 单/双 IMU 数据统一接口（`dual_imu_data_t`）
 - [balance_controller.c](main/balance_controller.c) / [.h](main/balance_controller.h)
-  - Mahony 四元数姿态估计
-  - 陀螺仪零偏自动校准（200 样本）
-  - 启动 IMU 姿态归零（再积 100 样本后捕获 attitude offset）
-  - 前馈 + 2DOF PID 力矩计算
+  - BNO055 路径：直接调用 `bno055_get_roll()` / `bno055_get_gyro_x()`，无软件融合负担
+  - MPU6050 路径（备用）：Mahony 四元数姿态估计 + 陀螺仪零偏自动校准
+  - 前馈 + 2DOF PID 力矩计算，输出 `tau_total`
+  - 角度死区平滑（硬死区 1°，软死区 3°，Hermite 过渡）
 - [steering_control.c](main/steering_control.c) / [.h](main/steering_control.h)
-  - GPIO 中断捕获 PWM、占空比转角度
-  - 角度 clamp 到 MT6826S 真实有效范围（DC 1%–99%）
-  - PID 闭环输出（DEADZONE = 3°，最小输出 30/60 µs 阈值）
+  - **SPI 模式**：通过 MT6826S 连续读命令（0xA0 0x03）采集 14-bit 绝对角度
+  - 角度 clamp、ENC_*_REVERSE 开关、NVS 零点偏移补偿
+  - PID 闭环输出（DEADZONE = 3°，最小输出阈值）
   - **NVS 持久化校准**：自动加载 / 串口 `cal` 写入；未校准时锁 PWM = 1500
 - [motor_control.c](main/motor_control.c) / [.h](main/motor_control.h)
   - LEDC 初始化、PWM 输出
-  - 双向推力 `motor_control_set_pwm_bidirectional()`
+  - 双向推力 `motor_control_set_pwm_bidirectional()`（H=0 静止路径专用）
+  - 矢量推力 `motor_control_set_pwm_vector()`（V3 路径）
   - ESC 校准任务、紧急停推
+- [rc_input.c](main/rc_input.c) / [.h](main/rc_input.h)
+  - GPIO 双边沿中断测量标准 RC PWM 脉宽（1000–2000 µs）
+  - 死区 ±30 µs，信号超时 200 ms 自动归零
+  - **定速巡航状态机**：拨杆稳定 2 s 后松手触发，`rc_input_is_cruising()` 查询
+  - 定速巡航激活/取消时联动 `g_heading_hold_active`
 - [control_params.c](main/control_params.c) / [.h](main/control_params.h)
-  - 全局可调参数（推力、PID、演示 Roll 等）
+  - 全局可调参数（`g_balance_kp/ki/kd`、`g_steer_kp/ki/kd`）
   - NVS Flash 初始化
 - [blinker_bridge.c](main/blinker_bridge.c) / [.h](main/blinker_bridge.h)
-  - Blinker IoT 任务封装
-  - 解析 App 文本命令（PID 调参 / `r <角度>` / `f <推力%>`）
+  - Blinker IoT 任务封装（Wi-Fi 连接后启动）
+  - 解析 App 文本命令：PID 调参 / `r <角度>` 演示 Roll / `f <推力%>`
+  - 三按钮差速转向（`turn_l` / `turn_f` 航向锁定 / `turn_r`）
+  - 1 Hz 上报实时 Roll 角与推力百分比
 
 ### 第三方组件
 
@@ -88,7 +106,7 @@ SteadySail 是一个基于 ESP32-S3 的双推进器 + 双矢量舵机姿态稳�
 | 宏 | 值 | 说明 |
 |---|---|---|
 | `MODE_TEST_SENSORS` | 0 | 仅打印 IMU 与编码器 |
-| `MODE_TEST_STEERING_ONLY` | 1 | 仅舵机闭环测试 |
+| `MODE_TEST_STEERING_ONLY` | 1 | 仅舵机闭环测试（含响应时间统计） |
 | `MODE_TEST_BALANCE_ONLY` | 2 | 仅平衡链路测试 |
 | `MODE_FULL_INTEGRATION` | 3 | 全链路（默认） |
 | `MODE_CALIBRATE_ESC` | 4 | 大电机 ESC 校准扫描 |
@@ -115,11 +133,14 @@ SteadySail 是一个基于 ESP32-S3 的双推进器 + 双矢量舵机姿态稳�
 
 | 功能 | 接口 |
 |---|---|
-| IMU0 I2C SDA / SCL | GPIO 8 / 9 |
+| BNO055 / IMU0 I2C SDA / SCL | GPIO 8 / 9 |
 | IMU1 I2C SDA / SCL（预留） | GPIO 10 / 11 |
-| 编码器输入 左 / 右 | GPIO 5 / 4 |
+| 编码器 SPI MISO / SCLK | GPIO 5 / 4 |
+| 编码器 SPI MOSI（共用） | GPIO 15 |
+| 编码器 SPI CS 左 / 右 | GPIO 6 / 3 |
 | 转向舵机 PWM 左 / 右 | GPIO 2 / 1 |
 | 推进 ESC PWM 左 / 右 | GPIO 18 / 19 |
+| RC 油门 PWM 输入 | GPIO 7 |
 
 ### PWM 配置
 
@@ -135,7 +156,9 @@ SteadySail 是一个基于 ESP32-S3 的双推进器 + 双矢量舵机姿态稳�
 |---|---|---|
 | `THRUST_LEFT_INVERT` / `THRUST_RIGHT_INVERT` | 0 / 0 | 推进器方向 |
 | `STEER_LEFT_INVERT` / `STEER_RIGHT_INVERT` | 1 / 1 | 舵机 PWM 镜像 |
-| `ENC_LEFT_REVERSE` / `ENC_RIGHT_REVERSE` | 0 / 0 | 编码器读数翻转 |
+| `ENC_LEFT_REVERSE` / `ENC_RIGHT_REVERSE` | 0 / 1 | 编码器读数翻转 |
+| `STEER_SEND_LEFT_REVERSE` / `STEER_SEND_RIGHT_REVERSE` | 1 / 1 | main.c 下发目标角镜像 |
+| `STEER_TARGET_LEFT_REVERSE` / `STEER_TARGET_RIGHT_REVERSE` | 0 / 1 | steering_control 内部目标角镜像 |
 
 ---
 
@@ -143,41 +166,42 @@ SteadySail 是一个基于 ESP32-S3 的双推进器 + 双矢量舵机姿态稳�
 
 `control_core_task()` 100 Hz：
 
-1. 读取舵机当前角度（编码器） + IMU 数据
-2. `balance_controller_update()` → 姿态、`tau_total`
-3. 安全保护：`|roll| > 60°` → 紧急停推 + 舵机回 180°
-4. **V3 矢量分解**（详见 §8）→ `target_angle_L/R` + `T_thrust_L/R`
-5. 目标角做环形低通：`filter_target += 0.1 * Δ`，对 360° 取模
-6. **L/R 物理输出交换**：`send_tgt_L = 360 − filter_target_R`
-7. 显示用反向：`disp_tgt_L = 360 − filter_target_L`
-8. **Scheme A 舵机就绪门控**：`r = max(0, 1 − |err|/15)`，仅允许推力上升
-9. `motor_control_set_pwm_bidirectional()` 下发 + 编码器健康检查
-10. `vTaskDelayUntil()` 保持 10 ms 周期
+1. **RC 输入**：`rc_input_get_throttle()` 更新 `g_forward_thrust`；检测定速巡航状态，激活时同步锁定 BNO055 当前偏航角（`g_heading_hold_active = true`）
+2. 读取舵机当前角度（MT6826S SPI 编码器）
+3. **BNO055 路径**：`balance_controller_update()` 直接从 BNO055 读取 Roll + GyroX → PID → `tau_total`
+4. 安全保护：`|roll| > 60°` → 紧急停推 + 舵机回 180°；`g_hard_estop` → 全通道压 1500 µs
+5. **H=0 静止路径**：`|H_thrust| < 5`（无前进推力）→ 舵机锁 180°，双电机正反转产生上下力差
+6. **V3 矢量分解**（详见 §8）→ `target_angle_L/R` + `T_thrust_L/R`
+7. **差速转向 / 航向保持**：`g_turn_state` 或 BNO055 偏航 PI 修正 `H_L / H_R`
+8. 目标角做环形低通（`filter_target += 0.1 * Δ`，对 360° 取模）
+9. **L/R 物理输出交换**：`send_tgt_L = 360 − filter_target_R`
+10. `motor_control_set_pwm_bidirectional()` 下发
+11. `vTaskDelayUntil()` 保持 10 ms 周期
 
 调试输出 ~10 Hz。
 
 ---
 
-## 7. 姿态融合（balance_controller.c）
+## 7. 姿态估计与控制律（balance_controller.c）
 
-### 7.1 启动两阶段校准
+### 7.1 BNO055 路径（当前默认，`USE_BNO055_FOR_ROLL = 1`）
+
+- 调用 `bno055_get_roll()` / `bno055_get_gyro_x()` 直接获取片上 NDOF 融合结果
+- 不运行 Mahony，无软件融合负担，**无积分漂移**
+- 偏航由磁力计持续修正，可作为航向保持参考
+
+### 7.2 MPU6050 路径（备用，`USE_BNO055_FOR_ROLL = 0`）
 
 1. 累计 200 样本求陀螺仪零偏均值
-2. 再积 100 样本等 Mahony 收敛 → 捕获 `attitude_offset_roll/pitch/yaw`
-3. 之后所有输出欧拉角减去 offset 并归一化到 ±180°
-
-效果：上电时记录"当前姿态 = 零位"，无需手动摆正下方。
-
-### 7.2 Mahony 估计
-
-- 单 IMU：`Kp_mahony = 30.0`
-- 双 IMU：自适应增益
+2. Mahony 融合（单 IMU `Kp = 30.0`）收敛后捕获姿态 offset
+3. 所有输出欧拉角减去 offset 并归一化到 ±180°
 
 ### 7.3 控制律
 
-- 前馈：重力扰动 + 惯量项 + 虚拟刚度
+- 前馈：重力扰动 + 惯量项 + 虚拟刚度（`K_SELF = 100`）
 - 反馈：2DOF PID（积分限幅）
-- `tau_total = FEEDFORWARD_PARAM * tau_ff − FEEDBACK_PARAM * tau_pid`
+- `tau_total = FEEDFORWARD_PARAM × tau_ff − FEEDBACK_PARAM × tau_pid`
+- 角度死区：硬死区 1°（输出 = 0），软死区 1°–3°（Hermite 平滑过渡）
 
 关键参数：`PID_KP=20`、`PID_KI=1`、`PID_KD=0`、`FEEDFORWARD_PARAM=0.28`、`FEEDBACK_PARAM=0.5`。
 
@@ -188,31 +212,40 @@ SteadySail 是一个基于 ESP32-S3 的双推进器 + 双矢量舵机姿态稳�
 [main.c](main/main.c) `control_core_task()`：
 
 ```text
-V_R = +ΔV   V_L = −ΔV         // 竖直分量相反
-H = H_thrust                  // 水平分量同相
-phi_R = atan2(H, V_R)         // 右舵角
-phi_L = atan2(H, V_L)         // 左舵角
-T = sqrt(V² + H²)             // 矢量幅值即推力
+dV = tau_total × THRUST_SCALE     // 竖直分量（带符号）
+V_R = +dV   V_L = −dV             // 两侧反相
+H_L / H_R = H_thrust ± DELTA_H/2  // 差速转向时不等
+phi_R = atan2(H_R, V_R)           // 右舵目标角
+phi_L = atan2(H_L, V_L)           // 左舵目标角
+T_L = sqrt(V_L² + H_L²)           // 左推力幅值
+T_R = sqrt(V_R² + H_R²)           // 右推力幅值
 ```
 
-电机 **不反转**；左右靠舵机 0/180° 切换实现"推/拉"对称。`ZERO_EPS = 1e-3` 防止 `atan2(0, −0)` 的 π 跳变。
+**电机始终同向不反转**；靠舵机跨 180° 实现推/拉方向切换。`THRUST_SCALE = 0.55`。
+
+### H=0 静止平衡路径
+
+`|H_thrust| < 5` 时跳过 V3，改为：
+- 舵机强制锁 180°（中立位）
+- `motor_control_set_pwm_bidirectional(|dV|, |dV|, inv_L, inv_R)` 直接用电机正反转产生上下力差
+- 该路径支持船体**静止时**的横滚稳定，无需前进推力
 
 ---
 
 ## 9. 转向闭环与编码器（steering_control.c）
 
-- GPIO 双边沿中断捕获 PWM 高低电平时长
-- `compute_angle()`：占空比 `clamp` 到 `[1%, 99%]`，映射到 `[0°, 360°]`（不再 wrap，避免边界抖动）
-- PID：`DEADZONE = 3°`，无内层 smoothstep；最小有效输出 30/60 µs 阈值
-- `set_target()` 内部 `360 − target` 翻转，对应硬件方向
+- **MT6826S SPI 模式**（`ENC_USE_SPI = 1`）：两路编码器共用 MISO/MOSI/SCLK，各独立 CS
+  - 连续读命令 `0xA0 0x03`，14-bit 绝对角度，2 MHz
+  - 抗 EMI 能力优于 PWM 捕获模式
+- 角度 clamp + `ENC_*_REVERSE` 开关 + NVS 零点偏移补偿
+- PID 闭环：`DEADZONE = 3°`，最小有效输出阈值
+- `set_target()` 内 `STEER_TARGET_*_REVERSE` 翻转，对应硬件方向
 
-### 9.1 NVS 持久化校准（新增）
+### 9.1 NVS 持久化校准
 
 - NVS 命名空间 `"steering"`，键 `off_l` / `off_r`（float 以 u32 存储）
-- `steering_control_init()` 上电尝试加载：
-  - **成功** → 进入"已校准"，正常工作
-  - **失败** → "未校准"，`steering_control_update()` 强制下发 PWM = 1500（360° 连续舵机此时静止，最安全）
-- `steering_control_calibrate_and_save()`：把当前编码器读数标定为 180°，写入 NVS
+- 上电自动加载：**成功** → 正常工作；**失败** → PWM 锁 1500（连续舵机静止，最安全）
+- `steering_control_calibrate_and_save()`：把当前 SPI 编码器读数标定为 180°，写入 NVS
 - 触发方式：把舵机摆到正下方，串口或 App 输入 `cal`
 
 ### 9.2 编码器健康
@@ -254,9 +287,14 @@ ESC 校准模式 (`MODE_CALIBRATE_ESC`) 循环扫描 1000 → 2000 → 1000 µs�
 
 - `blinker_bridge_start()` 在 IoT 模式下创建客户端任务
 - App 文本框命令支持：
-  - `kp 20` / `ki 1` / `kd 0` 等 PID 在线调参
-  - `r <角度>` 演示模式 Roll
-  - `f <推力%>` 推力百分比
+  - `kp / ki / kd`：平衡 PID 在线调参
+  - `r <角度>`：演示模式 Roll
+  - `f <推力%>`：推力百分比
+- 三按钮差速控制：
+  - **turn_l**：左转（`g_turn_state = -1`），解除航向保持
+  - **turn_f**：锁定当前 BNO055 偏航角（`g_heading_hold_active = true`）
+  - **turn_r**：右转（`g_turn_state = +1`），解除航向保持
+- 1 Hz 上报实时 Roll 角与当前推力百分比
 - 时间同步任务栈 4 KB（避免 SNTP 栈溢出）
 
 ---
@@ -292,12 +330,15 @@ idf.py -p <COM端口> flash monitor
 |---|---|
 | 运行模式 | `MODE_FULL_INTEGRATION` |
 | 转向模式 | `STEERING_MODE_PID` |
-| IMU 配置 | 单 IMU (`USE_DUAL_IMU = 0`) |
+| IMU 配置 | BNO055 NDOF (`USE_BNO055_FOR_ROLL = 1`，`USE_DUAL_IMU = 0`) |
+| 编码器模式 | SPI (`ENC_USE_SPI = 1`，2 MHz) |
 | 控制频率 | 100 Hz (`CONTROL_DT = 0.01`) |
 | 倾覆保护 | 开启 (`ENABLE_EMERGENCY_STOP = 1`，阈值 60°) |
 | I2C 自救 | 开启 (`ENABLE_I2C_RECOVERY = 1`) |
 | 演示模式 | 关闭 (`DEMO_MANUAL_ROLL = 0`) |
-| 舵机就绪容差 | `SERVO_TOL_DEG = 15°` |
+| 差速转向 dH | `TURN_DELTA_H = 100`（量程 0–500） |
+| 航向保持 PID | `HEADING_KP = 8.0`，`HEADING_KI = 0.05` |
+| RC 定速巡航 | 拨杆保持 2 s 后松手激活 |
 
 ---
 
@@ -316,28 +357,36 @@ idf.py -p <COM端口> flash monitor
 |---|---|
 | 船体抖动 | 降 `PID_KP` 或 `FEEDBACK_PARAM` |
 | 响应偏慢 | 升 `PID_KP` 或 `FEEDFORWARD_PARAM` |
-| 舵机滞后 / 跳变 | 检查编码器 PWM 信号、`compute_angle` clamp 是否触发 |
+| 舵机滞后 / 跳变 | 检查 SPI 线路与 CS 接线，确认 `ENC_*_REVERSE` 设置正确 |
 | 推进无响应 | 进入 `MODE_CALIBRATE_ESC` 验证 ESC |
-| 推力先动舵机后动 | 已被 Scheme A 解决；如仍出现可调小 `SERVO_TOL_DEG` |
 | 上电后舵机不动 | 检查是否输入 `cal` 完成首次校准 |
 | 重启后又要校准 | NVS 写入失败 → 看串口 `nvs_save_offsets` 错误码 |
+| 航向保持漂移 | BNO055 磁力计校准不足，在空旷处进行"8字"校准手势 |
+| RC 推力归零不灵 | 确认 RC 中位死区 ±30 µs；若信号超时则检查接收机供电 |
+| 定速巡航意外激活 | RC 拨杆机械卡在固定位置 2 s 触发，属正常；可调大 `RC_CRUISE_SETTLE_US` |
+| BNO055 初始化失败 | 检查 I2C0 (GPIO 8/9) 接线，确认 BNO055 地址 `0x29`（ADR 悬空） |
 
-### 15.3 双 IMU 切换
+### 15.3 回退到 MPU6050
 
-- `USE_DUAL_IMU = 1`，接入第二路 I2C 的 IMU，重新编译烧录
+将 `USE_BNO055_FOR_ROLL = 0` 并接入 MPU6050，重新编译即可切换到软件 Mahony 融合路径。
 
 ---
 
 ## 16. 重要更新日志（相对老 README）
 
+- ✅ **BNO055 替代 MPU6050**：片上 NDOF 融合，绝对横滚无漂移，偏航磁力计持续修正
+- ✅ **MT6826S SPI 模式**：替代 PWM 捕获，抗 EMI，14-bit 高精度
+- ✅ **RC 遥控输入**（GPIO 7）：标准 1000–2000 µs，映射为推力百分比
+- ✅ **定速巡航**：RC 拨杆保持 2 s 后松手触发，自动保持推力
+- ✅ **航向保持**：BNO055 绝对偏航 PI 控制；定速巡航时自动锁定
+- ✅ **H=0 静止平衡路径**：无前进推力时舵机锁 180°，电机正反转维持横滚稳定
+- ✅ **差速转向**：Blinker 三按钮驱动左右 H 不等量产生偏航
+- ✅ **双级急停**：软急停（`g_estop_active`）+ 硬急停（`g_hard_estop`，全通道压 1500 µs）
 - ✅ V3 矢量分解控制律（替代旧的"反转电机"方案）
-- ✅ 启动 IMU 姿态自动归零
 - ✅ NVS 持久化舵机零点校准 + 未校准锁 PWM = 1500
-- ✅ 舵机就绪门控（Scheme A）解决推力/舵机响应不对称
 - ✅ 编码器 clamp 替代 wrap，消除 0/360 边界抖动
 - ✅ 串口/App 双通道命令：`r` `f` `cal` + PID 在线调参
 - ✅ Blinker timesync 栈 2 KB → 4 KB
-- ✅ 取消每次上电自动 `calibrate_encoders()`
 
 ---
 
