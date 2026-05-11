@@ -141,6 +141,7 @@ SteadySail 是一个基于 ESP32-S3 的双推进器 + 双矢量舵机姿态稳�
 | 转向舵机 PWM 左 / 右 | GPIO 2 / 1 |
 | 推进 ESC PWM 左 / 右 | GPIO 18 / 19 |
 | RC 油门 PWM 输入 | GPIO 7 |
+| 磁控开关（硬急停） | GPIO 12（内部上拉，NO 型干簧管） |
 
 ### PWM 配置
 
@@ -169,7 +170,7 @@ SteadySail 是一个基于 ESP32-S3 的双推进器 + 双矢量舵机姿态稳�
 1. **RC 输入**：`rc_input_get_throttle()` 更新 `g_forward_thrust`；检测定速巡航状态，激活时同步锁定 BNO055 当前偏航角（`g_heading_hold_active = true`）
 2. 读取舵机当前角度（MT6826S SPI 编码器）
 3. **BNO055 路径**：`balance_controller_update()` 直接从 BNO055 读取 Roll + GyroX → PID → `tau_total`
-4. 安全保护：`|roll| > 60°` → 紧急停推 + 舵机回 180°；`g_hard_estop` → 全通道压 1500 µs
+4. 安全保护：`|roll| > 60°` → 紧急停推 + 舵机回 180°；**磁控急停**（`g_hard_estop = true`）→ 全通道锁 1500 µs，等待磁铁重新吸合 500 ms 后自动重启
 5. **H=0 静止路径**：`|H_thrust| < 5`（无前进推力）→ 舵机锁 180°，双电机正反转产生上下力差
 6. **V3 矢量分解**（详见 §8）→ `target_angle_L/R` + `T_thrust_L/R`
 7. **差速转向 / 航向保持**：`g_turn_state` 或 BNO055 偏航 PI 修正 `H_L / H_R`
@@ -262,6 +263,42 @@ T_R = sqrt(V_R² + H_R²)           // 右推力幅值
 
 ESC 校准模式 (`MODE_CALIBRATE_ESC`) 循环扫描 1000 → 2000 → 1000 µs。
 
+### 10.1 磁控开关硬急停
+
+#### 硬件设计
+
+- 器件：**NO 型干簧管**（常开，磁铁靠近时闭合）
+- 引脚：**GPIO 12**，内部上拉（`GPIO_PULLUP_ENABLE`）
+- 信号逻辑：
+  - 磁铁在位（正常）→ 干簧管闭合 → GPIO **LOW**
+  - 磁铁移走（触发）→ 干簧管断开 → GPIO **HIGH**
+- 配置常量（[system_config.h](main/system_config.h)）：
+  - `PIN_MAG_ESTOP = 12`
+  - `MAG_ESTOP_TRIGGER_LEVEL = 1`（HIGH 触发，对应 NO 型）
+
+#### 中断与标志
+
+- `mag_estop_isr()`（`IRAM_ATTR`）：任意边沿触发，检测到 `gpio_get_level() == MAG_ESTOP_TRIGGER_LEVEL` 时置 `g_hard_estop = true`
+- `mag_estop_init()`：上电时在 `app_main()` 中初始化，注册中断
+
+#### 控制任务处理逻辑
+
+`control_core_task()` 100 Hz 循环最高优先级分支：
+
+```c
+if (g_hard_estop) {
+    // 1. 首次触发打印一次（s_hard_estop_logged 防重复）
+    // 2. 推进 ESC 压到 1500 µs（motor_control_emergency_stop）
+    // 3. 舵机压到 1500 µs（motor_control_set_steering_pwm(1500, 1500)）
+    // 4. 轮询 GPIO：连续 50 帧（500 ms）检测磁铁重新吸合
+    // 5. 确认恢复 → 打印日志 → 延迟 1 s → esp_restart()
+}
+```
+
+- **急停期间所有 4 路输出均锁定 1500 µs**（推进器停转，连续舵机静止）
+- 磁铁重新吸合后不直接恢复控制，而是通过 **软件重启** 保证系统进入干净初始态
+- `s_recovery_count` 计数器确保消抖：需连续 500 ms 均检测到磁铁在位才触发重启
+
 ---
 
 ## 11. 串口命令（FULL_INTEGRATION）
@@ -339,6 +376,8 @@ idf.py -p <COM端口> flash monitor
 | 差速转向 dH | `TURN_DELTA_H = 100`（量程 0–500） |
 | 航向保持 PID | `HEADING_KP = 8.0`，`HEADING_KI = 0.05` |
 | RC 定速巡航 | 拨杆保持 2 s 后松手激活 |
+| 磁控急停引脚 | GPIO 12（NO 型干簧管，内部上拉，HIGH 触发） |
+| 急停恢复方式 | 磁铁重新吸合 500 ms → `esp_restart()` 软件重启 |
 
 ---
 
@@ -350,6 +389,7 @@ idf.py -p <COM端口> flash monitor
 - [ ] 编码器 `valid` 持续为真
 - [ ] 看到 "✓ 已从 NVS 加载校准" 或完成首次 `cal`
 - [ ] 串口 `f 10` 后推进 PWM 在 1500–1800 µs 区间变化
+- [ ] 磁控开关磁铁在位时串口无急停日志；移走磁铁后出现 `⛔ 磁控开关断开` 并输出锁定 1500 µs
 
 ### 15.2 常见现象
 
@@ -365,6 +405,9 @@ idf.py -p <COM端口> flash monitor
 | RC 推力归零不灵 | 确认 RC 中位死区 ±30 µs；若信号超时则检查接收机供电 |
 | 定速巡航意外激活 | RC 拨杆机械卡在固定位置 2 s 触发，属正常；可调大 `RC_CRUISE_SETTLE_US` |
 | BNO055 初始化失败 | 检查 I2C0 (GPIO 8/9) 接线，确认 BNO055 地址 `0x29`（ADR 悬空） |
+| 上电即急停（磁铁在位却触发） | 确认使用 NO 型干簧管；检查 `MAG_ESTOP_TRIGGER_LEVEL = 1`；用万用表确认磁铁在位时 GPIO 12 为 LOW |
+| 移走磁铁无反应 | 确认 GPIO 12 上拉已使能；检查干簧管是否为 NC 型（应换 NO 型或将 `MAG_ESTOP_TRIGGER_LEVEL` 改为 0） |
+| 急停后不自动重启 | 磁铁重新吸合后需保持 500 ms 稳定（干簧管抖动会重置计数），属正常消抖行为 |
 
 ### 15.3 回退到 MPU6050
 
@@ -381,7 +424,8 @@ idf.py -p <COM端口> flash monitor
 - ✅ **航向保持**：BNO055 绝对偏航 PI 控制；定速巡航时自动锁定
 - ✅ **H=0 静止平衡路径**：无前进推力时舵机锁 180°，电机正反转维持横滚稳定
 - ✅ **差速转向**：Blinker 三按钮驱动左右 H 不等量产生偏航
-- ✅ **双级急停**：软急停（`g_estop_active`）+ 硬急停（`g_hard_estop`，全通道压 1500 µs）
+- ✅ **双级急停**：软急停（`g_estop_active`，倾覆保护）+ 硬急停（`g_hard_estop`，全通道压 1500 µs）
+- ✅ **磁控开关硬急停**：GPIO 12 NO 型干簧管，移走磁铁立即锁定所有输出 1500 µs；磁铁重新吸合 500 ms 后自动软件重启
 - ✅ V3 矢量分解控制律（替代旧的"反转电机"方案）
 - ✅ NVS 持久化舵机零点校准 + 未校准锁 PWM = 1500
 - ✅ 编码器 clamp 替代 wrap，消除 0/360 边界抖动
