@@ -56,7 +56,7 @@
 #define PIN_SPI_SCLK        4   // 与 PWM 模式 PIN_ENC_RIGHT 复用，改接线后此脚接 SCLK
 #define PIN_SPI_MOSI        15  // 新增：接两个编码器的 MOSI（共用），选一个空闲 GPIO
 #define PIN_SPI_CS_LEFT     6   // 左编码器片选
-#define PIN_SPI_CS_RIGHT    3   // 右编码器片选
+#define PIN_SPI_CS_RIGHT    17  // 右编码器片选 (原GPIO3是Strapping脚，改为GPIO16)
 #define ENC_SPI_CLOCK_HZ    2000000   // 2 MHz，MT6826S 最大 16 MHz，留余量
 
 // --- 转向小电机 PWM 输出 ---
