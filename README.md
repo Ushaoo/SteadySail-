@@ -67,7 +67,7 @@ SteadySail 是一个基于 ESP32-S3 的双推进器 + 双矢量舵机姿态稳�
   - BNO055 路径：直接调用 `bno055_get_roll()` / `bno055_get_gyro_x()`，无软件融合负担
   - MPU6050 路径（备用）：Mahony 四元数姿态估计 + 陀螺仪零偏自动校准
   - 前馈 + 2DOF PID 力矩计算，输出 `tau_total`
-  - 角度死区平滑（硬死区 1°，软死区 3°，Hermite 过渡）
+  - 角度死区平滑（硬死区 1.5°，软死区 3.5°，Hermite 过渡）
 - [steering_control.c](main/steering_control.c) / [.h](main/steering_control.h)
   - **SPI 模式**：通过 MT6826S 连续读命令（0xA0 0x03）采集 14-bit 绝对角度
   - 角度 clamp、ENC_*_REVERSE 开关、NVS 零点偏移补偿
@@ -137,7 +137,7 @@ SteadySail 是一个基于 ESP32-S3 的双推进器 + 双矢量舵机姿态稳�
 | IMU1 I2C SDA / SCL（预留） | GPIO 10 / 11 |
 | 编码器 SPI MISO / SCLK | GPIO 5 / 4 |
 | 编码器 SPI MOSI（共用） | GPIO 15 |
-| 编码器 SPI CS 左 / 右 | GPIO 6 / 3 |
+| 编码器 SPI CS 左 / 右 | GPIO 13 / 17 |
 | 转向舵机 PWM 左 / 右 | GPIO 2 / 1 |
 | 推进 ESC PWM 左 / 右 | GPIO 18 / 19 |
 | RC 油门 PWM 输入 | GPIO 7 |
@@ -148,7 +148,7 @@ SteadySail 是一个基于 ESP32-S3 的双推进器 + 双矢量舵机姿态稳�
 - 频率 50 Hz，分辨率 14-bit
 - 中立脉宽 1500 µs
 - 调试限幅（[system_config.h](main/system_config.h)）：
-  - 推进：`THRUST_PWM_MIN_US = 1200`，`THRUST_PWM_MAX_US = 1800`
+  - 推进：`THRUST_PWM_MIN_US = 1000`，`THRUST_PWM_MAX_US = 2000`
   - 舵机：`STEER_PWM_MIN_US = 1000`，`STEER_PWM_MAX_US = 2000`
 
 ### 方向反转开关
@@ -174,7 +174,7 @@ SteadySail 是一个基于 ESP32-S3 的双推进器 + 双矢量舵机姿态稳�
 5. **H=0 静止路径**：`|H_thrust| < 5`（无前进推力）→ 舵机锁 180°，双电机正反转产生上下力差
 6. **V3 矢量分解**（详见 §8）→ `target_angle_L/R` + `T_thrust_L/R`
 7. **差速转向 / 航向保持**：`g_turn_state` 或 BNO055 偏航 PI 修正 `H_L / H_R`
-8. 目标角做环形低通（`filter_target += 0.1 * Δ`，对 360° 取模）
+8. 目标角线性低通（`filter_target += 0.4 * Δ`，结果 clamp 到 [80°, 280°]，不跨 0/360 边界）
 9. **L/R 物理输出交换**：`send_tgt_L = 360 − filter_target_R`
 10. `motor_control_set_pwm_bidirectional()` 下发
 11. `vTaskDelayUntil()` 保持 10 ms 周期
@@ -202,9 +202,9 @@ SteadySail 是一个基于 ESP32-S3 的双推进器 + 双矢量舵机姿态稳�
 - 前馈：重力扰动 + 惯量项 + 虚拟刚度（`K_SELF = 100`）
 - 反馈：2DOF PID（积分限幅）
 - `tau_total = FEEDFORWARD_PARAM × tau_ff − FEEDBACK_PARAM × tau_pid`
-- 角度死区：硬死区 1°（输出 = 0），软死区 1°–3°（Hermite 平滑过渡）
+- 角度死区：硬死区 1.5°（输出 = 0），软死区 1.5°–3.5°（Hermite 平滑过渡）
 
-关键参数：`PID_KP=20`、`PID_KI=1`、`PID_KD=0`、`FEEDFORWARD_PARAM=0.28`、`FEEDBACK_PARAM=0.5`。
+关键参数：`PID_KP=20`、`PID_KI=1`、`PID_KD=0`、`FEEDFORWARD_PARAM=0.28`、`FEEDBACK_PARAM=0.5`、`ANGLE_DEADZONE=1.5°`、`ANGLE_DEADZONE_SOFT=3.5°`。
 
 ---
 
@@ -323,15 +323,24 @@ if (g_hard_estop) {
 ## 12. Blinker App 远程控制
 
 - `blinker_bridge_start()` 在 IoT 模式下创建客户端任务
-- App 文本框命令支持：
-  - `kp / ki / kd`：平衡 PID 在线调参
-  - `r <角度>`：演示模式 Roll
-  - `f <推力%>`：推力百分比
-- 三按钮差速控制：
+- **推力滑块**（`thrust`）：-50 ~ +50%，直接写入 `g_forward_thrust`
+- **App 文本框**（`pid_in`）命令支持，可混用多种语法：
+  - 单参数：`sp <v>` / `si <v>` / `sd <v>` → 转向 PID Kp/Ki/Kd
+  - 单参数：`bp <v>` / `bi <v>` / `bd <v>` → 平衡 PID Kp/Ki/Kd
+  - 整组：`s <kp> <ki> <kd>` / `b <kp> <ki> <kd>`
+  - `r <角度>`：演示模式下模拟 Roll（±60°）
+  - `f <推力%>`：推力百分比（±100）
+  - `reboot`：立即重启 ESP32
+- **三按钮差速控制**：
   - **turn_l**：左转（`g_turn_state = -1`），解除航向保持
   - **turn_f**：锁定当前 BNO055 偏航角（`g_heading_hold_active = true`）
   - **turn_r**：右转（`g_turn_state = +1`），解除航向保持
-- 1 Hz 上报实时 Roll 角与当前推力百分比
+- **推力快速测试按钮**：`fwd_p30` / `fwd_0` / `fwd_n30`（一键设 ±30% / 0）
+- **硬急停按钮**（`hard_stop`）：tap 立即把所有通道压到 1500 µs
+- **重启按钮**（`reboot`）：tap 立即重启 ESP32
+- **在线校准按钮**（`cal`）：长按后抬起 → 调用 `steering_control_calibrate_and_save()`
+- **6 个 PID 独立数字显示控件**：`sp/si/sd`（转向）、`bp/bi/bd`（平衡），实时同步当前值
+- **实时数据上报**（1 Hz）：Roll 角、推力百分比、舵机 PWM、编码器角度
 - 时间同步任务栈 4 KB（避免 SNTP 栈溢出）
 
 ---
@@ -373,6 +382,7 @@ idf.py -p <COM端口> flash monitor
 | 倾覆保护 | 开启 (`ENABLE_EMERGENCY_STOP = 1`，阈值 60°) |
 | I2C 自救 | 开启 (`ENABLE_I2C_RECOVERY = 1`) |
 | 演示模式 | 关闭 (`DEMO_MANUAL_ROLL = 0`) |
+| 角度死区 | 硬死区 `ANGLE_DEADZONE = 1.5°`，软死区 `ANGLE_DEADZONE_SOFT = 3.5°` |
 | 差速转向 dH | `TURN_DELTA_H = 100`（量程 0–500） |
 | 航向保持 PID | `HEADING_KP = 8.0`，`HEADING_KI = 0.05` |
 | RC 定速巡航 | 拨杆保持 2 s 后松手激活 |
