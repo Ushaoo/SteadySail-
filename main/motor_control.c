@@ -181,8 +181,8 @@ void motor_control_set_pwm_bidirectional(float push_L, float push_R, bool invert
     if (push_R > 500.0f) push_R = 500.0f;
 
     // 降低到 50%
-    push_L *= 0.5f;
-    push_R *= 0.5f;
+    push_L *= 1.0f;
+    push_R *= 1.0f;
 
     // ===== 低通滤波：平滑PWM输出 =====
     static float filtered_push_L = 0.0f, filtered_push_R = 0.0f;

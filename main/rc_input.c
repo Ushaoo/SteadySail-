@@ -125,8 +125,9 @@ float rc_input_get_throttle(void)
     float raw = 0.0f;
     if (offset > RC_DEADBAND_US || offset < -RC_DEADBAND_US) {
         raw = ((float)offset / (float)RC_HALF_RANGE_US) * 100.0f;
-        if (raw >  50.0f) raw =  50.0f;
-        if (raw < -50.0f) raw = -50.0f;
+        if (raw >  100.0f) raw =  100.0f;
+        if (raw < -100.0f) raw = -100.0f;
+  
     }
 
     int64_t now = esp_timer_get_time();

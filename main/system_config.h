@@ -55,7 +55,7 @@
 #define PIN_SPI_MISO        5   // 与 PWM 模式 PIN_ENC_LEFT 复用，改接线后此脚接 MISO
 #define PIN_SPI_SCLK        4   // 与 PWM 模式 PIN_ENC_RIGHT 复用，改接线后此脚接 SCLK
 #define PIN_SPI_MOSI        15  // 新增：接两个编码器的 MOSI（共用），选一个空闲 GPIO
-#define PIN_SPI_CS_LEFT     6   // 左编码器片选
+#define PIN_SPI_CS_LEFT     13   // 左编码器片选
 #define PIN_SPI_CS_RIGHT    17  // 右编码器片选 (原GPIO3是Strapping脚，改为GPIO16)
 #define ENC_SPI_CLOCK_HZ    2000000   // 2 MHz，MT6826S 最大 16 MHz，留余量
 
@@ -106,8 +106,8 @@
 //   - 所有 motor_control_* 下发函数都会被强制 clamp 到该范围
 // ------------------------------------------
 // 主推进器（大电机 / ESC）调试限幅：1500 ± 偏移
-#define THRUST_PWM_MIN_US      1200    // 默认 1500 - 50
-#define THRUST_PWM_MAX_US      1800    // 默认 1500 + 50
+#define THRUST_PWM_MIN_US      1000    // 默认 1500 - 50
+#define THRUST_PWM_MAX_US      2000    // 默认 1500 + 50
 
 // 转向舵机（小电机）调试限幅：1500 ± 偏移
 //   舵机机械范围一般是 1000~2000；调试期可设小一点限位
@@ -187,7 +187,7 @@
 #define PID_KD              0.0f
 #define FEEDFORWARD_PARAM   0.28f
 #define FEEDBACK_PARAM      0.5f
-#define ANGLE_DEADZONE      1.0f
-#define ANGLE_DEADZONE_SOFT 3.0f
+#define ANGLE_DEADZONE      1.5f
+#define ANGLE_DEADZONE_SOFT 3.5f
 
 #endif // SYSTEM_CONFIG_H
