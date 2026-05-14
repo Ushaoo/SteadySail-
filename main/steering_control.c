@@ -73,10 +73,6 @@ static bool spi_present_left  = false;
 static bool spi_present_right = false;
 // init 完成标志：init 过程中不应用 spi_present 过滤
 static bool spi_init_done = false;
-// SPI transmit 连续失败计数（句柄错误状态检测）
-static int spi_transmit_fail_left  = 0;
-static int spi_transmit_fail_right = 0;
-#define SPI_TRANSMIT_FAIL_RESET  10  // 连续失败 10 次触发设备重新注册
 
 #endif  // !ENC_USE_SPI
 
@@ -200,39 +196,7 @@ static float spi_read_encoder(spi_device_handle_t dev, bool *valid_out) {
     };
 
     esp_err_t ret = spi_device_transmit(dev, &t);
-    if (ret != ESP_OK) {
-        // transmit 失败：累计计数，达到阈值后重新注册设备（恢复句柄错误状态）
-        bool is_left = (dev == spi_dev_left);
-        int *fcnt = is_left ? &spi_transmit_fail_left : &spi_transmit_fail_right;
-        (*fcnt)++;
-        if (*fcnt >= SPI_TRANSMIT_FAIL_RESET) {
-            *fcnt = 0;
-            spi_device_handle_t *pdev = is_left ? &spi_dev_left : &spi_dev_right;
-            int cs_pin = is_left ? PIN_SPI_CS_LEFT : PIN_SPI_CS_RIGHT;
-            ESP_LOGW(TAG, "[ENC %s] SPI transmit 连续失败，重新注册设备 CS=%d",
-                     is_left ? "L" : "R", cs_pin);
-            spi_bus_remove_device(*pdev);
-            spi_device_interface_config_t dev_cfg = {
-                .clock_speed_hz  = ENC_SPI_CLOCK_HZ,
-                .mode            = 3,
-                .spics_io_num    = cs_pin,
-                .queue_size      = 1,
-                .command_bits    = 0,
-                .address_bits    = 0,
-                .cs_ena_pretrans = 1,
-            };
-            if (spi_bus_add_device(SPI2_HOST, &dev_cfg, pdev) == ESP_OK) {
-                ESP_LOGI(TAG, "[ENC %s] 设备重新注册成功", is_left ? "L" : "R");
-            } else {
-                *pdev = NULL;
-                ESP_LOGE(TAG, "[ENC %s] 设备重新注册失败", is_left ? "L" : "R");
-            }
-        }
-        *valid_out = false; return -1.0f;
-    }
-    // transmit 成功，重置失败计数
-    if (dev == spi_dev_left)  spi_transmit_fail_left  = 0;
-    else                      spi_transmit_fail_right = 0;
+    if (ret != ESP_OK) { *valid_out = false; return -1.0f; }
 
     uint8_t angle_h = rx_buf[2];        // ANGLE[14:7]
     uint8_t angle_l = rx_buf[3];        // ANGLE[6:0] in bits[7:1], bit0 固定 0
@@ -258,20 +222,7 @@ static float spi_read_encoder(spi_device_handle_t dev, bool *valid_out) {
     }
 
     // STATUS[1]=1: 磁场过弱；STATUS[2]=1: 供电欠压 → 数据不可信
-    if (status & 0x06) {
-        // 每 50 次失败打印一次，帮助判断是磁场问题还是供电问题
-        static int fail_l = 0, fail_r = 0;
-        int *fcnt = (dev == spi_dev_left) ? &fail_l : &fail_r;
-        if (++(*fcnt) >= 50) {
-            *fcnt = 0;
-            ESP_LOGW(TAG, "[ENC %s] STATUS=0x%X h=%02X l=%02X → %s%s",
-                     (dev == spi_dev_left) ? "L" : "R", status,
-                     angle_h, angle_l,
-                     (status & 0x02) ? "磁场过弱 " : "",
-                     (status & 0x04) ? "供电欠压" : "");
-        }
-        *valid_out = false; return -1.0f;
-    }
+    if (status & 0x06) { *valid_out = false; return -1.0f; }
 
     // 重建 15-bit 角度值 ANGLE[14:0]
     uint16_t angle_raw = ((uint16_t)angle_h << 7) | (angle_l >> 1);
@@ -378,25 +329,6 @@ void steering_control_init(void) {
     // MISO 加软件上拉：编码器未接时 MISO 浮空，上拉后读到全 1，STATUS≠0，稳定报 invalid
     gpio_set_pull_mode(PIN_SPI_MISO, GPIO_PULLUP_ONLY);
 
-    // ===== CS 复位脉冲 =====
-    // MT6826S 共享 MISO 总线：若任意一侧上电时 SPI 状态机未就绪，会拉住 MISO 导致另一侧也失败。
-    // 在 SPI driver 接管 CS 之前，手动将两个 CS 引脚拉高 10ms，
-    // 确保两个编码器均从 CSN=HIGH（空闲/复位）状态启动，互不干扰。
-    {
-        gpio_config_t cs_cfg = {
-            .pin_bit_mask = (1ULL << PIN_SPI_CS_LEFT) | (1ULL << PIN_SPI_CS_RIGHT),
-            .mode         = GPIO_MODE_OUTPUT,
-            .pull_up_en   = GPIO_PULLUP_DISABLE,
-            .pull_down_en = GPIO_PULLDOWN_DISABLE,
-            .intr_type    = GPIO_INTR_DISABLE,
-        };
-        gpio_config(&cs_cfg);
-        gpio_set_level(PIN_SPI_CS_LEFT,  1);
-        gpio_set_level(PIN_SPI_CS_RIGHT, 1);
-        vTaskDelay(pdMS_TO_TICKS(10));  // 等待两侧编码器 SPI 状态机复位
-        ESP_LOGI(TAG, "CS 复位完成，CS_L=%d CS_R=%d 已拉高", PIN_SPI_CS_LEFT, PIN_SPI_CS_RIGHT);
-    }
-
     spi_device_interface_config_t dev_cfg = {
         .clock_speed_hz  = ENC_SPI_CLOCK_HZ,
         .mode            = 3,             // MT6826S: CPOL=1, CPHA=1
@@ -416,38 +348,27 @@ void steering_control_init(void) {
              PIN_SPI_MISO, PIN_SPI_MOSI, PIN_SPI_SCLK, PIN_SPI_CS_LEFT, PIN_SPI_CS_RIGHT);
 
     // SPI 上电后等待 MT6826S OCF 就绪（通常 < 50ms）
-    // 左右分开等待：避免一侧卡死拉住 MISO 导致另一侧超时被误判为不在线
     {
-        ESP_LOGI(TAG, "等待编码器就绪 (最多 500ms，左右独立等待)...");
-        bool ever_vl = false, ever_vr = false;
-
-        // 先单独等左侧
+        ESP_LOGI(TAG, "等待编码器就绪 (最多 500ms)...");
         TickType_t t0 = xTaskGetTickCount();
-        while (!ever_vl && xTaskGetTickCount() - t0 < pdMS_TO_TICKS(500)) {
-            bool vl;
-            spi_read_encoder(spi_dev_left, &vl);
-            if (vl) ever_vl = true;
-            else vTaskDelay(pdMS_TO_TICKS(10));
-        }
-        ESP_LOGI(TAG, "左编码器: %s (%d ms)", ever_vl ? "在线" : "未检测到",
-                 (int)((xTaskGetTickCount() - t0) * portTICK_PERIOD_MS));
-
-        // 再单独等右侧（避免左侧卡死时干扰右侧）
-        t0 = xTaskGetTickCount();
-        while (!ever_vr && xTaskGetTickCount() - t0 < pdMS_TO_TICKS(500)) {
-            bool vr;
+        const TickType_t TIMEOUT = pdMS_TO_TICKS(500);
+        // 左右独立追踪「是否曾经读到过有效值」，避免右侧未接导致左侧超时被错误标记为不存在
+        bool ever_vl = false, ever_vr = false;
+        while (true) {
+            bool vl, vr;
+            spi_read_encoder(spi_dev_left,  &vl);
             spi_read_encoder(spi_dev_right, &vr);
+            if (vl) ever_vl = true;
             if (vr) ever_vr = true;
-            else vTaskDelay(pdMS_TO_TICKS(10));
+            if ((ever_vl && ever_vr) || xTaskGetTickCount() - t0 > TIMEOUT) break;
+            vTaskDelay(pdMS_TO_TICKS(10));
         }
-        ESP_LOGI(TAG, "右编码器: %s (%d ms)", ever_vr ? "在线" : "未检测到",
-                 (int)((xTaskGetTickCount() - t0) * portTICK_PERIOD_MS));
-
-        if (!ever_vl || !ever_vr) {
-            ESP_LOGW(TAG, "⚠ 编码器超时: L=%d R=%d", (int)ever_vl, (int)ever_vr);
+        if (xTaskGetTickCount() - t0 > TIMEOUT) {
+            ESP_LOGW(TAG, "⚠ 编码器 500ms 超时: L=%d R=%d", (int)ever_vl, (int)ever_vr);
         } else {
             ESP_LOGI(TAG, "✓ 两侧编码器均就绪");
         }
+        // 记录哪侧连接了（不依赖最后一次读取结果，而是「幦是否曾有过」）
         spi_present_left  = ever_vl;
         spi_present_right = ever_vr;
         spi_init_done = true;
