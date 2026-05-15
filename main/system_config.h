@@ -55,7 +55,7 @@
 #define PIN_SPI_MISO        5   // 与 PWM 模式 PIN_ENC_LEFT 复用，改接线后此脚接 MISO
 #define PIN_SPI_SCLK        4   // 与 PWM 模式 PIN_ENC_RIGHT 复用，改接线后此脚接 SCLK
 #define PIN_SPI_MOSI        15  // 新增：接两个编码器的 MOSI（共用），选一个空闲 GPIO
-#define PIN_SPI_CS_LEFT     13   // 左编码器片选
+#define PIN_SPI_CS_LEFT     13  // 左编码器片选
 #define PIN_SPI_CS_RIGHT    17  // 右编码器片选 (原GPIO3是Strapping脚，改为GPIO16)
 #define ENC_SPI_CLOCK_HZ    2000000   // 2 MHz，MT6826S 最大 16 MHz，留余量
 
@@ -132,8 +132,8 @@
 #define THRUST_LEFT_INVERT     0    // 0=正常, 1=反转左推进器输出方向
 #define THRUST_RIGHT_INVERT    0    // 0=正常, 1=反转右推进器输出方向
 
-#define STEER_LEFT_INVERT      1    // 0=正常, 1=反转左舵机 PWM 方向
-#define STEER_RIGHT_INVERT     1    // 0=正常, 1=反转右舵机 PWM 方向
+#define STEER_LEFT_INVERT      0    // 0=正常, 1=反转左舵机 PWM 方向
+#define STEER_RIGHT_INVERT     0    // 0=正常, 1=反转右舵机 PWM 方向
 
 #define ENC_LEFT_REVERSE       0    // 0=正常, 1=反转左编码器读数（angle = 360 - angle）
 #define ENC_RIGHT_REVERSE      1    // 0=正常, 1=反转右编码器读数（angle = 360 - angle）
@@ -189,5 +189,31 @@
 #define FEEDBACK_PARAM      0.5f
 #define ANGLE_DEADZONE      1.5f
 #define ANGLE_DEADZONE_SOFT 3.5f
+
+// ==========================================
+// 6. 虚拟锚点（GPS Anchor Hold）参数
+//   抛锚后船自动保持在锚点 ±R 米的圆圈内；
+//   超出外圈 → 选择"船头/船尾朝向锚点"的最短转角方向，前进/倒车回归。
+// ==========================================
+#define ANCHOR_RADIUS_INNER_M     3.0f    // 进入此圆 → 怠速漂浮（死区）
+#define ANCHOR_RADIUS_OUTER_M     5.0f   // 超出此圆 → 启动返航（滞回外圈）
+#define ANCHOR_MAX_THRUST_PCT     30.0f   // 前进返航油门上限
+#define ANCHOR_REVERSE_MAX_PCT    20.0f   // 倒车返航油门上限（建议比前进小）
+#define ANCHOR_DIST_KP            5.0f    // 距离→油门 P 增益 (% / m)
+#define ANCHOR_SETTLE_SAMPLES     5       // 抛锚时取 N 个 fix 平均
+#define ANCHOR_GPS_TIMEOUT_MS     5000    // 超过 5s 无 fix → LOST_GPS, 主推=0
+#define ANCHOR_HEADING_TOL_DEG    20.0f   // 航向误差 < 此值才给前/退推力
+
+// ==========================================
+// 7. 虚拟锚点开关（NO 型常开开关，内部上拉）
+//   闭合（GPIO=LOW） → anchor_set_here()  抛锚
+//   断开（GPIO=HIGH）→ anchor_release()   起锚
+// ==========================================
+#define PIN_ANCHOR_SWITCH         40
+#define ANCHOR_SW_ACTIVE_LEVEL    0       // 0=LOW 触发抛锚（NO 型）
+#define ANCHOR_SW_DEBOUNCE_MS     50      // 电平稳定 50ms 才视为状态变化
+// 上电时的"虚拟初始电平"：设为 ACTIVE_LEVEL 表示假装已经在抛锚状态，
+// 这样开机时如果开关已闭合，不会自动触发抛锚，必须用户手动拨一次。
+#define ANCHOR_SW_INIT_AS_ACTIVE  1
 
 #endif // SYSTEM_CONFIG_H

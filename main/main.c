@@ -18,6 +18,8 @@
 #include "bno055_driver.h"
 #include "rc_input.h"
 #include "driver/gpio.h"
+#include "anchor_control.h"
+#include "gps_nmea.h"
 
 static const char *TAG = "MAIN";
 
@@ -323,6 +325,38 @@ void control_core_task(void *pvParameters) {
         if (rc_input_is_valid()) {
             g_forward_thrust = rc_input_get_throttle();
         }
+
+        // ====== 虚拟锚点开关轮询（100Hz + 50ms 消抖 + 边沿触发） ======
+        {
+            static int s_anc_sw_stable = ANCHOR_SW_INIT_AS_ACTIVE ? ANCHOR_SW_ACTIVE_LEVEL
+                                                                  : !ANCHOR_SW_ACTIVE_LEVEL;
+            static int s_anc_sw_last_raw = -1;
+            static int s_anc_sw_cnt      = 0;
+            const int  STABLE_FRAMES     = ANCHOR_SW_DEBOUNCE_MS / 10;
+
+            int raw = gpio_get_level((gpio_num_t)PIN_ANCHOR_SWITCH);
+            if (raw == s_anc_sw_last_raw) {
+                if (s_anc_sw_cnt < STABLE_FRAMES) s_anc_sw_cnt++;
+            } else {
+                s_anc_sw_cnt      = 0;
+                s_anc_sw_last_raw = raw;
+            }
+            if (s_anc_sw_cnt >= STABLE_FRAMES && raw != s_anc_sw_stable) {
+                s_anc_sw_stable = raw;
+                if (raw == ANCHOR_SW_ACTIVE_LEVEL) {
+                    ESP_LOGW(TAG, "\xF0\x9F\xAA\x9D 锚点开关闭合 → 抛锚");
+                    anchor_set_here();
+                } else {
+                    ESP_LOGW(TAG, "\xF0\x9F\xAA\x9D 锚点开关断开 → 起锚");
+                    anchor_release();
+                }
+            }
+        }
+
+        // ====== 虚拟锚点接管（若激活） ======
+        // 锚点会按需覆写 g_forward_thrust 和 g_target_heading / g_heading_hold_active；
+        // 未激活时此函数立刻返回，不影响 RC / Blinker 控制。
+        anchor_control_update();
 
         // ====== 定速巡航联动定航向 ======
         // 检测巡航状态边沿：激活时自动锁定当前航向；取消时自动解除航向保持。
@@ -744,7 +778,7 @@ void control_core_task(void *pvParameters) {
 
         // 串口实时数据监测 (每 10 帧打一条，10Hz)
         static int print_cnt = 0;
-        if (++print_cnt >= 10) { 
+        if (++print_cnt >= 20) { 
             // 获取实际下发的 PWM 脉宽（大电机 & 舵机）
             uint32_t actual_pwm_L, actual_pwm_R;
             motor_control_get_last_pwm(&actual_pwm_L, &actual_pwm_R);
@@ -801,6 +835,21 @@ static void IRAM_ATTR mag_estop_isr(void *arg)
     }
 }
 
+// ====== 虚拟锚点开关（NO 型常开，内部上拉，纯轮询）======
+static void anchor_switch_init(void)
+{
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << PIN_ANCHOR_SWITCH),
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io_conf);
+    ESP_LOGI(TAG, "\xF0\x9F\xAA\x9D 锚点开关已初始化 GPIO%d (LOW=抛锚 HIGH=起锚)",
+             PIN_ANCHOR_SWITCH);
+}
+
 static void mag_estop_init(void)
 {
     gpio_config_t io_conf = {
@@ -847,6 +896,11 @@ void app_main(void)
 
     // 3. 初始化磁控急停（NC 干簧管，GPIO PIN_MAG_ESTOP；内部上拉，下降沿触发）
     mag_estop_init();
+
+    // 3.1 初始化虚拟锚点模块 + 锚点开关 + GPS（顺序：模块先就绪，再启 GPS 喂数据）
+    anchor_control_init();
+    anchor_switch_init();
+    gps_nmea_start();
 
     // 4. 初始化 BNO055（I2C0，GPIO 8/9，考接 MPU6050 原接口）
     //    USE_BNO055_FOR_ROLL=1 时：BNO055 同时负责 Roll 平衡与航向保持；=0 时仅用于航向保持

@@ -101,22 +101,22 @@ void motor_control_init(void) {
     //    前两个脉冲用于唤醒/复位舵机内部 MCU（一些 360° 连续舵机首次上电
     //    若直接喂中立信号，会停在"未定义状态"，必须先送一组高/低脉冲才能正常进入伺服模式）。
     //    最后 1500us 至少保持 1.5s（≥75 个 50Hz PWM 周期），让舵机锁定为"零速"中立位。
-    uint32_t duty_max = us_to_duty(2000);
-    uint32_t duty_min = us_to_duty(1000);
+    uint32_t duty_max = us_to_duty(2050);
+    uint32_t duty_min = us_to_duty(950);
 
     ESP_LOGI(TAG, "Servo init pulse: 2000us for 50ms...");
     ledc_set_duty(LEDC_MODE, STEER_LEFT_CHANNEL, duty_max);
     ledc_update_duty(LEDC_MODE, STEER_LEFT_CHANNEL);
     ledc_set_duty(LEDC_MODE, STEER_RIGHT_CHANNEL, duty_max);
     ledc_update_duty(LEDC_MODE, STEER_RIGHT_CHANNEL);
-    vTaskDelay(pdMS_TO_TICKS(50));
+    vTaskDelay(pdMS_TO_TICKS(100));
 
     ESP_LOGI(TAG, "Servo init pulse: 1000us for 50ms...");
     ledc_set_duty(LEDC_MODE, STEER_LEFT_CHANNEL, duty_min);
     ledc_update_duty(LEDC_MODE, STEER_LEFT_CHANNEL);
     ledc_set_duty(LEDC_MODE, STEER_RIGHT_CHANNEL, duty_min);
     ledc_update_duty(LEDC_MODE, STEER_RIGHT_CHANNEL);
-    vTaskDelay(pdMS_TO_TICKS(50));
+    vTaskDelay(pdMS_TO_TICKS(100));
 
     ESP_LOGI(TAG, "Servo neutral hold (1500us, 1.5s) for power-on lock-in...");
     ledc_set_duty(LEDC_MODE, STEER_LEFT_CHANNEL, duty_neutral);

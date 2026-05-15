@@ -10,9 +10,9 @@ volatile float g_balance_ki = PID_KI;
 volatile float g_balance_kd = PID_KD;
 
 // --- 转向 PID（默认值与原 steering_control.c 内常量一致）---
-volatile float g_steer_kp = 8.68f;
+volatile float g_steer_kp = 8.88f;
 volatile float g_steer_ki = 0.2f;
-volatile float g_steer_kd = 1.0f;
+volatile float g_steer_kd = 1.2f;
 
 void control_params_init(void)
 {
