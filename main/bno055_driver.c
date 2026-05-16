@@ -97,7 +97,7 @@ esp_err_t bno055_init(void)
         i2c_cmd_link_delete(scan_cmd);
         if (scan_ret == ESP_OK) {
             ESP_LOGI(TAG, "  发现设备: 0x%02X", addr);
-            if (addr == 0x28 || addr == 0x29) found_addr = addr;
+            if (addr == 0x28 || addr == 0x29 || addr == 0x2A) found_addr = addr;
         }
     }
     if (found_addr == 0) {
