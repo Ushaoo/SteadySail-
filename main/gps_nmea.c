@@ -173,6 +173,43 @@ static void parse_rmc(const char *sentence)
     }
 }
 
+/* ─── 解析 GGA：提取卫星数 / 定位质量 / HDOP，仅用于打印 ─────────────── */
+static void parse_gga(const char *sentence)
+{
+    char buf[GPS_LINE_BUF_SIZE];
+    strncpy(buf, sentence, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    const int MAX_FIELDS = 16;
+    char *fields[MAX_FIELDS];
+    int   nfields = 0;
+
+    char *p = buf;
+    fields[nfields++] = p;
+    while (*p && nfields < MAX_FIELDS) {
+        if (*p == ',' || *p == '*') {
+            *p = '\0';
+            fields[nfields++] = p + 1;
+        }
+        p++;
+    }
+    if (nfields < 10) return;
+
+    // GGA 字段: 0=$GxGGA 1=UTC 2=lat 3=N/S 4=lon 5=E/W
+    //          6=fixQuality(0=无,1=GPS,2=DGPS) 7=satsUsed 8=HDOP 9=alt
+    int   fix_quality = atoi(fields[6]);
+    int   sats_used   = atoi(fields[7]);
+    float hdop        = (float)atof(fields[8]);
+
+    static TickType_t last_log = 0;
+    TickType_t now = xTaskGetTickCount();
+    if ((now - last_log) * portTICK_PERIOD_MS >= 1000) {  // 1Hz 打印
+        ESP_LOGI(TAG, "Sats used: %d   FixQuality: %d   HDOP: %.2f",
+                 sats_used, fix_quality, hdop);
+        last_log = now;
+    }
+}
+
 /* ─── UART init ─────────────────────────────────────────────────────────────── */
 
 static void gps_uart_init(void)
@@ -226,10 +263,14 @@ static void gps_read_task(void *arg)
             } else if (c == '\r' || c == '\n') {
                 if (in_sentence && line_pos > 1) {
                     line[line_pos] = '\0';
-                    if ((strncmp(line, "$GNRMC", 6) == 0 ||
-                         strncmp(line, "$GPRMC", 6) == 0) &&
-                        nmea_checksum_ok(line)) {
-                        parse_rmc(line);
+                    if (nmea_checksum_ok(line)) {
+                        if (strncmp(line, "$GNRMC", 6) == 0 ||
+                            strncmp(line, "$GPRMC", 6) == 0) {
+                            parse_rmc(line);
+                        } else if (strncmp(line, "$GNGGA", 6) == 0 ||
+                                   strncmp(line, "$GPGGA", 6) == 0) {
+                            parse_gga(line);
+                        }
                     }
                 }
                 line_pos    = 0;

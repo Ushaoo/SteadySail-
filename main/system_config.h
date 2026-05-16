@@ -195,11 +195,11 @@
 //   抛锚后船自动保持在锚点 ±R 米的圆圈内；
 //   超出外圈 → 选择"船头/船尾朝向锚点"的最短转角方向，前进/倒车回归。
 // ==========================================
-#define ANCHOR_RADIUS_INNER_M     3.0f    // 进入此圆 → 怠速漂浮（死区）
-#define ANCHOR_RADIUS_OUTER_M     5.0f   // 超出此圆 → 启动返航（滞回外圈）
-#define ANCHOR_MAX_THRUST_PCT     30.0f   // 前进返航油门上限
-#define ANCHOR_REVERSE_MAX_PCT    20.0f   // 倒车返航油门上限（建议比前进小）
-#define ANCHOR_DIST_KP            5.0f    // 距离→油门 P 增益 (% / m)
+#define ANCHOR_RADIUS_INNER_M     0.5f    // 进入此圆 → 怠速漂浮（死区）
+#define ANCHOR_RADIUS_OUTER_M     1.0f   // 超出此圆 → 启动返航（滞回外圈）
+#define ANCHOR_MAX_THRUST_PCT     50.0f   // 前进返航油门上限
+#define ANCHOR_REVERSE_MAX_PCT    30.0f   // 倒车返航油门上限（建议比前进小）
+#define ANCHOR_DIST_KP            100.0f    // 距离→油门 P 增益 (% / m)
 #define ANCHOR_SETTLE_SAMPLES     5       // 抛锚时取 N 个 fix 平均
 #define ANCHOR_GPS_TIMEOUT_MS     5000    // 超过 5s 无 fix → LOST_GPS, 主推=0
 #define ANCHOR_HEADING_TOL_DEG    20.0f   // 航向误差 < 此值才给前/退推力
