@@ -36,4 +36,14 @@ esp_err_t bno055_get_roll(float *roll_deg);
  */
 esp_err_t bno055_get_gyro_x(float *gyrox_dps);
 
+/**
+ * @brief 读取线性加速度（已去重力，body 系：X=船头，Y=左舷，Z=向上）
+ *        NDOF 模式 UNIT_SEL bit0=0 时，单位 1/100 m/s²，换算后输出 m/s²
+ * @param[out] ax  X 轴加速度 m/s²
+ * @param[out] ay  Y 轴加速度 m/s²
+ * @param[out] az  Z 轴加速度 m/s²
+ * @return ESP_OK 成功
+ */
+esp_err_t bno055_get_linear_accel(float *ax, float *ay, float *az);
+
 #endif // BNO055_DRIVER_H

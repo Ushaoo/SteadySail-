@@ -22,6 +22,7 @@
 
 #include "gps_nmea.h"
 #include "anchor_control.h"
+#include "fusion.h"
 
 /* ─── Configuration ────────────────────────────────────────────────────────── */
 
@@ -158,7 +159,15 @@ static void parse_rmc(const char *sentence)
             .timestamp_ms = now_ms,
         };
         anchor_feed_gps(&a);
-    } else {
+        // ===== 喂给传感器融合模块 =====
+        fusion_gps_in_t f = {
+            .lat          = lat,
+            .lon          = lon,
+            .speed_mps    = (float)(spd_kmh / 3.6),
+            .fix_valid    = true,
+            .timestamp_ms = now_ms,
+        };
+        fusion_feed_gps(&f);    } else {
         TickType_t now = xTaskGetTickCount();
         if ((now - last_no_fix_log) * portTICK_PERIOD_MS >= 5000) {
             ESP_LOGW(TAG, "No fix – searching for satellites (move to open sky)");
@@ -170,6 +179,12 @@ static void parse_rmc(const char *sentence)
             .timestamp_ms = now_ms,
         };
         anchor_feed_gps(&a);
+
+        fusion_gps_in_t f = {
+            .fix_valid    = false,
+            .timestamp_ms = now_ms,
+        };
+        fusion_feed_gps(&f);
     }
 }
 

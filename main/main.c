@@ -20,6 +20,7 @@
 #include "driver/gpio.h"
 #include "anchor_control.h"
 #include "gps_nmea.h"
+#include "fusion.h"
 
 static const char *TAG = "MAIN";
 
@@ -356,6 +357,9 @@ void control_core_task(void *pvParameters) {
         // ====== 虚拟锚点接管（若激活） ======
         // 锚点会按需覆写 g_forward_thrust 和 g_target_heading / g_heading_hold_active；
         // 未激活时此函数立刻返回，不影响 RC / Blinker 控制。
+        // ====== 传感器融合更新（100Hz）======
+        fusion_update();
+
         anchor_control_update();
 
         // ====== 定速巡航联动定航向 ======
@@ -917,6 +921,12 @@ void app_main(void)
     //  - 若 NVS 中没有数据（首次烧录后），舵机被锁定在 PWM=1500 中立位；
     //    用户把舵机摆正下方后，串口输入 'cal' 即可完成首次校准并写入 NVS。
     vTaskDelay(pdMS_TO_TICKS(100));
+
+    // 初始化 GPS+BNO055 传感器融合模块（必须在 fusion_calibrate/fusion_update 之前）
+    fusion_init();
+
+    // 加速度计零偏静态标定（船静止时，1.5s）
+    fusion_calibrate_acc_bias(1500);
 
     ESP_LOGI(TAG, "SteadySail 就绪，当前模式: %d", CURRENT_RUN_MODE);
 

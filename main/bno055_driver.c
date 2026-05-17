@@ -221,3 +221,20 @@ esp_err_t bno055_get_gyro_x(float *gyrox_dps)
     *gyrox_dps = (float)raw / 16.0f;
     return ESP_OK;
 }
+
+esp_err_t bno055_get_linear_accel(float *ax, float *ay, float *az)
+{
+    // LIA_Data 寄存器：0x28~0x2D（X_LSB, X_MSB, Y_LSB, Y_MSB, Z_LSB, Z_MSB）
+    // NDOF 模式已去除重力；UNIT_SEL bit0=0 → 1 LSB = 1/100 m/s²
+    uint8_t buf[6];
+    esp_err_t err = bno055_read_bytes(0x28, buf, 6);
+    if (err != ESP_OK) return err;
+
+    int16_t rx = (int16_t)((uint16_t)buf[1] << 8 | buf[0]);
+    int16_t ry = (int16_t)((uint16_t)buf[3] << 8 | buf[2]);
+    int16_t rz = (int16_t)((uint16_t)buf[5] << 8 | buf[4]);
+    *ax = (float)rx / 100.0f;
+    *ay = (float)ry / 100.0f;
+    *az = (float)rz / 100.0f;
+    return ESP_OK;
+}

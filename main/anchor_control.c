@@ -13,7 +13,7 @@
 
 #include "anchor_control.h"
 #include "system_config.h"
-#include "bno055_driver.h"
+#include "fusion.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include <math.h>
@@ -34,23 +34,15 @@ static anchor_state_t s_state = ANCHOR_DISABLED;
 // 锚点位置（采样平均后写入）
 static double s_anchor_lat = 0.0;
 static double s_anchor_lon = 0.0;
-static double s_anchor_cos_lat = 1.0;   // 缓存 cos(纬度) 用于经度米换算
 
-// 抛锚时的样本累积
+// 抗锡时的样本累积
 static double  s_set_lat_sum = 0.0;
 static double  s_set_lon_sum = 0.0;
 static int     s_set_count   = 0;
 
-// 最新 GPS（由 anchor_feed_gps 写入；anchor_control_update 在 100Hz 用）
-static double  s_last_lat = 0.0;
-static double  s_last_lon = 0.0;
-static bool    s_last_valid = false;
-static uint32_t s_last_gps_ms = 0;
-
-// 距离/方位（GPS 帧到达时刷新一次，100Hz 循环只读）
+// 距离/方位（100Hz 由 fusion 局部 ENU 刷新，由查询函数对外暴露）
 static float   s_dist_m_filt    = 0.0f;
 static float   s_bearing_deg    = 0.0f;
-static bool    s_have_solution  = false;
 
 // 抛锚前保存的用户/控制状态，起锚时还原
 static bool    s_saved_heading_active = false;
@@ -82,19 +74,13 @@ static inline float wrap360(float a) {
 }
 
 // 局部 ENU 坐标差（米）。原点 = 锚点。
-static void enu_from_anchor(double lat, double lon,
-                            float *east_m, float *north_m)
-{
-    const double R = 6371000.0;
-    *east_m  = (float)((lon - s_anchor_lon) * DEG2RAD * R * s_anchor_cos_lat);
-    *north_m = (float)((lat - s_anchor_lat) * DEG2RAD * R);
-}
+// 已由 fusion_get_local_enu 替代，保留此实现仅作参考。
+// static void enu_from_anchor(...) { ... }
 
 // ====== 抛锚 / 起锚 ======
 void anchor_control_init(void)
 {
     s_state = ANCHOR_DISABLED;
-    s_have_solution = false;
     ESP_LOGI(TAG, "anchor module ready");
 }
 
@@ -104,8 +90,8 @@ void anchor_set_here(void)
         ESP_LOGW(TAG, "已在锚定状态(%d)，忽略重复抛锚", (int)s_state);
         return;
     }
-    if (!s_last_valid) {
-        ESP_LOGW(TAG, "拒绝抛锚：当前无有效 GPS fix");
+    if (!fusion_is_valid()) {
+        ESP_LOGW(TAG, "拒绝抗锡：fusion 无效（GPS 尚未就绪）");
         return;
     }
     s_set_lat_sum = 0.0;
@@ -125,7 +111,6 @@ void anchor_release(void)
 {
     if (s_state == ANCHOR_DISABLED) return;
     s_state = ANCHOR_DISABLED;
-    s_have_solution = false;
     s_reverse_mode = false;
 
     // 还原用户的航向锁/差速
@@ -136,18 +121,10 @@ void anchor_release(void)
     ESP_LOGI(TAG, "<<< 起锚：已释放控制权");
 }
 
-// ====== GPS 输入回调（由 GPS 驱动 1Hz 调用） ======
+// ====== GPS 输入回调（由 GPS 驱动 1Hz 调用；仅处理 SETTING 采样，其余由 fusion 接管） ======
 void anchor_feed_gps(const anchor_gps_sample_t *s)
 {
-    if (!s) return;
-    s_last_gps_ms = s->timestamp_ms;
-    if (!s->fix_valid) {
-        // 不更新坐标，只刷新时间戳——让 LOST_GPS 看门狗按"无 fix"判断
-        return;
-    }
-    s_last_valid  = true;
-    s_last_lat    = s->lat;
-    s_last_lon    = s->lon;
+    if (!s || !s->fix_valid) return;
 
     // ---- SETTING：累加平均 ----
     if (s_state == ANCHOR_SETTING) {
@@ -160,39 +137,9 @@ void anchor_feed_gps(const anchor_gps_sample_t *s)
         if (s_set_count >= ANCHOR_SETTLE_SAMPLES) {
             s_anchor_lat = s_set_lat_sum / s_set_count;
             s_anchor_lon = s_set_lon_sum / s_set_count;
-            s_anchor_cos_lat = cos(s_anchor_lat * DEG2RAD);
             s_state = ANCHOR_HOLDING;
-            s_have_solution = false;   // 等下一帧 GPS 算
             ESP_LOGI(TAG, "锚点确定: lat=%.7f lon=%.7f → 进入 HOLDING",
                      s_anchor_lat, s_anchor_lon);
-        }
-        return;
-    }
-
-    // ---- HOLDING / RETURNING / LOST_GPS：刷新距离与方位 ----
-    if (s_state == ANCHOR_HOLDING || s_state == ANCHOR_RETURNING ||
-        s_state == ANCHOR_LOST_GPS) {
-
-        float east_m, north_m;
-        enu_from_anchor(s->lat, s->lon, &east_m, &north_m);
-
-        float dist_now = sqrtf(east_m * east_m + north_m * north_m);
-
-        // 一阶低通，过滤 GPS 抖动 (~0.1m)
-        if (!s_have_solution) {
-            s_dist_m_filt = dist_now;
-        } else {
-            s_dist_m_filt = 0.7f * s_dist_m_filt + 0.3f * dist_now;
-        }
-
-        // 船→锚点 的方位角：锚点相对船的方向 = (-east, -north)
-        // atan2(east, north) 标准方位角约定 (0=N, 90=E)
-        s_bearing_deg = wrap360(atan2f(-east_m, -north_m) * RAD2DEG);
-        s_have_solution = true;
-
-        if (s_state == ANCHOR_LOST_GPS) {
-            ESP_LOGI(TAG, "GPS 已恢复，重新进入 HOLDING");
-            s_state = ANCHOR_HOLDING;
         }
     }
 }
@@ -210,23 +157,32 @@ void anchor_control_update(void)
         return;
     }
 
-    // ---- GPS 看门狗 ----
+    // ---- 融合定位看门狗（替代原 GPS 超时销機） ----
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000ULL);
-    if (now_ms - s_last_gps_ms > ANCHOR_GPS_TIMEOUT_MS) {
+    if (!fusion_is_valid() || fusion_gps_age_ms() > ANCHOR_GPS_TIMEOUT_MS) {
         if (s_state != ANCHOR_LOST_GPS) {
-            ESP_LOGW(TAG, "GPS 超时 %lu ms → LOST_GPS, 停机",
-                     (unsigned long)(now_ms - s_last_gps_ms));
+            ESP_LOGW(TAG, "GPS/fusion 无效 → LOST_GPS, 停机 (age=%lu ms)",
+                     (unsigned long)fusion_gps_age_ms());
         }
-        s_state = ANCHOR_LOST_GPS;
-        g_forward_thrust      = 0.0f;
+        s_state           = ANCHOR_LOST_GPS;
+        g_forward_thrust  = 0.0f;
         g_heading_hold_active = false;
-        g_turn_state          = 0;
+        g_turn_state      = 0;
         return;
     }
 
-    if (!s_have_solution) {
-        g_forward_thrust = 0.0f;
-        return;
+    // GPS 恢复
+    if (s_state == ANCHOR_LOST_GPS) {
+        ESP_LOGI(TAG, "GPS 已恢复，重新进入 HOLDING");
+        s_state = ANCHOR_HOLDING;
+    }
+
+    // ---- 100Hz：从 fusion 刷新相对锡点的 ENU 距离/方位 ----
+    {
+        float _e, _n;
+        fusion_get_local_enu(s_anchor_lat, s_anchor_lon, &_e, &_n);
+        s_dist_m_filt = hypotf(_e, _n);
+        s_bearing_deg = wrap360(atan2f(-_e, -_n) * RAD2DEG);
     }
 
     // ---- 状态机：HOLDING <-> RETURNING（带滞回） ----
@@ -254,13 +210,9 @@ void anchor_control_update(void)
 
     // ============================================================
     // RETURNING：船头/船尾任意一端朝向锚点（最短转角），分别前进/倒车
+    // 航向来自 fusion，已经包含 GPS COG 偏置修正
     // ============================================================
-    float yaw_now = 0.0f;
-    if (bno055_get_heading(&yaw_now) != ESP_OK) {
-        // 拿不到航向就别乱推，下一帧重试
-        g_forward_thrust = 0.0f;
-        return;
-    }
+    float yaw_now = fusion_get_heading_deg();
 
     float hdg_bow   = s_bearing_deg;                       // 船头朝锚点
     float hdg_stern = wrap360(s_bearing_deg + 180.0f);     // 船尾朝锚点
