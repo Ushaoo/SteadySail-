@@ -68,10 +68,10 @@ void imu_test_task(void *pvParameters) {
         // BNO055 模式：imu_test_task 直接通过 balance_controller 读取 BNO055 Roll 角
         balance_controller_update(&imu_data, &state);
         if (++print_count >= 10) {
-            printf("\n--- BNO055 融合数据 (100Hz读取, 10Hz显示) ---\n");
-            printf("[BNO055] Roll:%.2f\u00b0 Pitch:%.2f\u00b0 Yaw:%.2f\u00b0 | Tau:%.2f\n",
-                   state.roll_deg, state.pitch_deg, state.yaw_deg, state.tau_total);
-            printf("-----------------------------------\n");
+            ESP_LOGI(TAG, "--- BNO055 融合数据 (100Hz读取, 10Hz显示) ---");
+            ESP_LOGI(TAG, "Roll:%.2f° Pitch:%.2f° Yaw:%.2f° | Tau:%.2f",
+                     state.roll_deg, state.pitch_deg, state.yaw_deg, state.tau_total);
+            ESP_LOGI(TAG, "-----------------------------------");
             print_count = 0;
         }
 #else
@@ -81,24 +81,24 @@ void imu_test_task(void *pvParameters) {
             
             // 每 10 帧打一条（10Hz）
             if (++print_count >= 10) {
-                printf("\n--- IMU 数据输出 (100Hz读取, 10Hz显示) ---\n");
+                ESP_LOGI(TAG, "--- IMU 数据输出 (100Hz读取, 10Hz显示) ---");
                 
                 #if USE_DUAL_IMU
-                printf("[IMU1] Ax:%.3f Ay:%.3f Az:%.3f | Gx:%.3f Gy:%.3f Gz:%.3f\n",
-                       imu_data.imu1.accel_x, imu_data.imu1.accel_y, imu_data.imu1.accel_z,
-                       imu_data.imu1.gyro_x, imu_data.imu1.gyro_y, imu_data.imu1.gyro_z);
-                printf("[IMU2] Ax:%.3f Ay:%.3f Az:%.3f | Gx:%.3f Gy:%.3f Gz:%.3f\n",
-                       imu_data.imu2.accel_x, imu_data.imu2.accel_y, imu_data.imu2.accel_z,
-                       imu_data.imu2.gyro_x, imu_data.imu2.gyro_y, imu_data.imu2.gyro_z);
+                ESP_LOGI(TAG, "IMU1 | Ax:%.3f Ay:%.3f Az:%.3f | Gx:%.3f Gy:%.3f Gz:%.3f",
+                         imu_data.imu1.accel_x, imu_data.imu1.accel_y, imu_data.imu1.accel_z,
+                         imu_data.imu1.gyro_x, imu_data.imu1.gyro_y, imu_data.imu1.gyro_z);
+                ESP_LOGI(TAG, "IMU2 | Ax:%.3f Ay:%.3f Az:%.3f | Gx:%.3f Gy:%.3f Gz:%.3f",
+                         imu_data.imu2.accel_x, imu_data.imu2.accel_y, imu_data.imu2.accel_z,
+                         imu_data.imu2.gyro_x, imu_data.imu2.gyro_y, imu_data.imu2.gyro_z);
                 #else
-                printf("[IMU] Ax:%.3f Ay:%.3f Az:%.3f | Gx:%.3f Gy:%.3f Gz:%.3f\n",
-                       imu_data.imu1.accel_x, imu_data.imu1.accel_y, imu_data.imu1.accel_z,
-                       imu_data.imu1.gyro_x, imu_data.imu1.gyro_y, imu_data.imu1.gyro_z);
+                ESP_LOGI(TAG, "IMU | Ax:%.3f Ay:%.3f Az:%.3f | Gx:%.3f Gy:%.3f Gz:%.3f",
+                         imu_data.imu1.accel_x, imu_data.imu1.accel_y, imu_data.imu1.accel_z,
+                         imu_data.imu1.gyro_x, imu_data.imu1.gyro_y, imu_data.imu1.gyro_z);
                 #endif
                 
-                printf("[融合] Roll:%.2f° Pitch:%.2f° Yaw:%.2f° | Tau:%.2f\n",
-                       state.roll_deg, state.pitch_deg, state.yaw_deg, state.tau_total);
-                printf("-----------------------------------\n");
+                ESP_LOGI(TAG, "融合 | Roll:%.2f° Pitch:%.2f° Yaw:%.2f° | Tau:%.2f",
+                         state.roll_deg, state.pitch_deg, state.yaw_deg, state.tau_total);
+                ESP_LOGI(TAG, "-----------------------------------");
                 
                 print_count = 0;
             }
@@ -246,6 +246,43 @@ void steering_test_task(void *pvParameters) {
     }
 }
 
+// SPI 编码器原始数据打印任务（仅在 MODE_TEST_ENCODER_SPI 下启动，200ms/次）
+void encoder_spi_raw_print_task(void *pvParameters) {
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    const TickType_t xFrequency = pdMS_TO_TICKS(100);
+    while (1) {
+        uint8_t rx_l[6] = {0}, rx_r[6] = {0};
+        bool ok_l = steering_control_spi_read_raw(0, rx_l);
+        bool ok_r = steering_control_spi_read_raw(1, rx_r);
+
+        if (ok_l) {
+            uint8_t angle_h = rx_l[2], angle_l = rx_l[3];
+            uint8_t status  = rx_l[4] & 0x07;
+            uint16_t raw15  = ((uint16_t)angle_h << 7) | (angle_l >> 1);
+            float angle     = raw15 / 32768.0f * 360.0f;
+            ESP_LOGI(TAG, "ENC L | rx=%02X %02X %02X %02X %02X %02X | h=%02X l=%02X status=%d raw15=%5u angle=%6.1f",
+                     rx_l[0], rx_l[1], rx_l[2], rx_l[3], rx_l[4], rx_l[5],
+                     angle_h, angle_l, status, raw15, angle);
+        } else {
+            ESP_LOGE(TAG, "ENC L SPI 传输失败");
+        }
+
+        if (ok_r) {
+            uint8_t angle_h = rx_r[2], angle_l = rx_r[3];
+            uint8_t status  = rx_r[4] & 0x07;
+            uint16_t raw15  = ((uint16_t)angle_h << 7) | (angle_l >> 1);
+            float angle     = raw15 / 32768.0f * 360.0f;
+            ESP_LOGI(TAG, "ENC R | rx=%02X %02X %02X %02X %02X %02X | h=%02X l=%02X status=%d raw15=%5u angle=%6.1f",
+                     rx_r[0], rx_r[1], rx_r[2], rx_r[3], rx_r[4], rx_r[5],
+                     angle_h, angle_l, status, raw15, angle);
+        } else {
+            ESP_LOGE(TAG, "ENC R SPI 传输失败");
+        }
+
+        vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    }
+}
+
 // 强实时大本营控制任务 (100Hz)
 void control_core_task(void *pvParameters) {
     dual_imu_data_t imu_data;
@@ -373,17 +410,17 @@ void control_core_task(void *pvParameters) {
                 if (bno055_get_heading(&hdg) == ESP_OK) {
                     g_target_heading      = hdg;
                     g_heading_hold_active = true;
-                    printf("[CRZ] 定速 %.1f%% + 定航向 %.1f° 同时激活\n",
-                           g_forward_thrust, hdg);
+                    ESP_LOGI(TAG, "CRZ | 定速 %.1f%% + 定航向 %.1f° 同时激活",
+                             g_forward_thrust, hdg);
                 } else {
                     g_heading_hold_active = false;
-                    printf("[CRZ] 定速 %.1f%% 激活，BNO055 读取失败，仅定速\n",
-                           g_forward_thrust);
+                    ESP_LOGW(TAG, "CRZ | 定速 %.1f%% 激活，BNO055 读取失败，仅定速",
+                             g_forward_thrust);
                 }
             } else if (!now_cruising && s_prev_cruising) {
                 // 巡航刚取消：解除航向保持
                 g_heading_hold_active = false;
-                printf("[CRZ] 定速取消，航向保持已解除\n");
+                ESP_LOGI(TAG, "CRZ | 定速取消，航向保持已解除");
             }
             s_prev_cruising = now_cruising;
         }
@@ -782,7 +819,7 @@ void control_core_task(void *pvParameters) {
 
         // 串口实时数据监测 (每 10 帧打一条，10Hz)
         static int print_cnt = 0;
-        if (++print_cnt >= 20) { 
+        if (++print_cnt >= MAIN_PRINT_INTERVAL) { 
             // 获取实际下发的 PWM 脉宽（大电机 & 舵机）
             uint32_t actual_pwm_L, actual_pwm_R;
             motor_control_get_last_pwm(&actual_pwm_L, &actual_pwm_R);
@@ -799,25 +836,28 @@ void control_core_task(void *pvParameters) {
 
             // 摇杆诊断信息（含上/下沿计数器、丢弃计数、原始脉宽）
             rc_input_print_diag();
+            uint32_t rc_pwm = rc_input_get_raw_pwm();
 
             if (rc_input_is_cruising() && g_heading_hold_active) {
                 // 定速 + 定向：额外显示航向目标→当前
-                printf("Fwd:%.1f%%(CRZ) | L:%.1f\u2192%.1f | R:%.1f\u2192%.1f | SteerPWM:%u/%u | MotorPWM:%u/%u | Roll:%.2f\u00b0 | Hdg:%.1f\u00b0\u2192%.1f\u00b0(HOLD) | EncL:%s EncR:%s\n",
-                       g_forward_thrust,
-                       disp_tgt_L, cur_steer_left, disp_tgt_R, cur_steer_right,
-                       steer_pwm_L, steer_pwm_R,
-                       actual_pwm_L, actual_pwm_R,
-                       state.roll_deg,
-                       g_target_heading, dbg_heading,
-                       enc_left_fault ? "X" : "\u2713", enc_right_fault ? "X" : "\u2713");
+                ESP_LOGI(TAG, "RC:%luμs | Fwd:%.1f%%(CRZ) | L:%.1f→%.1f | R:%.1f→%.1f | SteerPWM:%u/%u | MotorPWM:%u/%u | Roll:%.2f° | Hdg:%.1f°→%.1f°(HOLD) | EncL:%s EncR:%s",
+                         (unsigned long)rc_pwm,
+                         g_forward_thrust,
+                         disp_tgt_L, cur_steer_left, disp_tgt_R, cur_steer_right,
+                         steer_pwm_L, steer_pwm_R,
+                         actual_pwm_L, actual_pwm_R,
+                         state.roll_deg,
+                         g_target_heading, dbg_heading,
+                         enc_left_fault ? "X" : "✓", enc_right_fault ? "X" : "✓");
             } else {
-                printf("Fwd:%.1f%%%s | L:%.1f\u2192%.1f | R:%.1f\u2192%.1f | SteerPWM:%u/%u | MotorPWM:%u/%u | Roll:%.2f\u00b0 | Hdg:%.1f\u00b0 | EncL:%s EncR:%s\n",
-                       g_forward_thrust, rc_input_is_cruising() ? "(CRZ)" : "",
-                       disp_tgt_L, cur_steer_left, disp_tgt_R, cur_steer_right,
-                       steer_pwm_L, steer_pwm_R,
-                       actual_pwm_L, actual_pwm_R,
-                       state.roll_deg, dbg_heading,
-                       enc_left_fault ? "X" : "\u2713", enc_right_fault ? "X" : "\u2713");
+                ESP_LOGI(TAG, "RC:%luμs | Fwd:%.1f%%%s | L:%.1f→%.1f | R:%.1f→%.1f | SteerPWM:%u/%u | MotorPWM:%u/%u | Roll:%.2f° | Hdg:%.1f° | EncL:%s EncR:%s",
+                         (unsigned long)rc_pwm,
+                         g_forward_thrust, rc_input_is_cruising() ? "(CRZ)" : "",
+                         disp_tgt_L, cur_steer_left, disp_tgt_R, cur_steer_right,
+                         steer_pwm_L, steer_pwm_R,
+                         actual_pwm_L, actual_pwm_R,
+                         state.roll_deg, dbg_heading,
+                         enc_left_fault ? "X" : "✓", enc_right_fault ? "X" : "✓");
             }
             print_cnt = 0;
         }
@@ -961,14 +1001,14 @@ void app_main(void)
                 if (rx_len > 0) {
                     rx_buf[rx_len] = '\0';
                     if (strcmp(rx_buf, "cal") == 0 || strcmp(rx_buf, "CAL") == 0) {
-                        printf("\n>>> [CAL] 开始校准舵机零点（请确认舵机已摆正下方）...\n");
+                        ESP_LOGI(TAG, "[CAL] 开始校准舵机零点（请确认舵机已摆正下方）...");
                         steering_control_calibrate_and_save();
-                        printf(">>> [CAL] 校准完成，已写入 NVS。下次上电将自动加载。 <<<\n");
+                        ESP_LOGI(TAG, "[CAL] 校准完成，已写入 NVS。下次上电将自动加载。");
                         rx_len = 0;
                         continue;
                     }
                     if (strcmp(rx_buf, "reboot") == 0 || strcmp(rx_buf, "REBOOT") == 0) {
-                        printf("\n>>> [REBOOT] 1 秒后重启 ESP32... <<<\n");
+                        ESP_LOGW(TAG, "[REBOOT] 1 秒后重启 ESP32...");
                         vTaskDelay(pdMS_TO_TICKS(1000));
                         esp_restart();
                     }
@@ -978,9 +1018,9 @@ void app_main(void)
                         g_test_steer_angle = input_val;
                         if(g_test_steer_angle < 90.0f) g_test_steer_angle = 90.0f;
                         if(g_test_steer_angle > 270.0f) g_test_steer_angle = 270.0f;
-                        printf("\n>>> 收到角度指令! 目标设为: %.1f ° <<<\n", g_test_steer_angle);
+                        ESP_LOGI(TAG, "收到角度指令! 目标设为: %.1f °", g_test_steer_angle);
                     } else {
-                        printf("\n>>> 无效输入: %s <<<\n", rx_buf);
+                        ESP_LOGW(TAG, "无效输入: %s", rx_buf);
                     }
                     rx_len = 0;
                 }
@@ -989,6 +1029,58 @@ void app_main(void)
             }
         }
         vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+#elif CURRENT_RUN_MODE == MODE_TEST_ENCODER_SPI
+    ESP_LOGI(TAG, "[ENC SPI RAW] 模式启动 - 所有控制功能正常，同时输出编码器 SPI 原始字节 (200ms/次)");
+    xTaskCreatePinnedToCore(encoder_spi_raw_print_task, "enc_spi_raw", 4096, NULL, 4, NULL, 1);
+    xTaskCreatePinnedToCore(control_core_task, "control_core_task", 4096, NULL, 5, NULL, 1);
+    blinker_bridge_start();
+
+    // 串口命令（cal / reboot / w / s）与全功能模式一致
+    {
+        char rx_buf[64] = {0};
+        int rx_len = 0;
+        while (1) {
+            int ch = getchar();
+            if (ch != EOF) {
+                if (ch == '\r' || ch == '\n') {
+                    if (rx_len > 0) {
+                        rx_buf[rx_len] = '\0';
+                        if (strcmp(rx_buf, "cal") == 0 || strcmp(rx_buf, "CAL") == 0) {
+                            ESP_LOGI(TAG, "[CAL] 开始校准舵机零点...");
+                            steering_control_calibrate_and_save();
+                            ESP_LOGI(TAG, "[CAL] 校准完成。");
+                        } else if (strcmp(rx_buf, "reboot") == 0 || strcmp(rx_buf, "REBOOT") == 0) {
+                            ESP_LOGW(TAG, "[REBOOT] 1 秒后重启...");
+                            vTaskDelay(pdMS_TO_TICKS(1000));
+                            esp_restart();
+                        } else if (strcmp(rx_buf, "w") == 0 || strcmp(rx_buf, "W") == 0) {
+                            g_forward_thrust += 10.0f;
+                            if (g_forward_thrust > 50.0f) g_forward_thrust = 50.0f;
+                            ESP_LOGI(TAG, "推力 +10%%, 当前: %.1f%%", g_forward_thrust);
+                        } else if (strcmp(rx_buf, "s") == 0 || strcmp(rx_buf, "S") == 0) {
+                            g_forward_thrust -= 10.0f;
+                            if (g_forward_thrust < -50.0f) g_forward_thrust = -50.0f;
+                            ESP_LOGI(TAG, "推力 -10%%, 当前: %.1f%%", g_forward_thrust);
+                        } else {
+                            char *endptr = NULL;
+                            float v = strtof(rx_buf, &endptr);
+                            if (endptr != rx_buf) {
+                                g_forward_thrust = v;
+                                if (g_forward_thrust > 50.0f) g_forward_thrust = 50.0f;
+                                if (g_forward_thrust < -50.0f) g_forward_thrust = -50.0f;
+                                ESP_LOGI(TAG, "推力设为 %.1f%%", g_forward_thrust);
+                            }
+                        }
+                        rx_len = 0;
+                    }
+                } else if (rx_len < (int)sizeof(rx_buf) - 1) {
+                    rx_buf[rx_len++] = (char)ch;
+                }
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
     }
 
 #else
@@ -1010,25 +1102,25 @@ void app_main(void)
                 if (strcmp(rx_buf, "w") == 0 || strcmp(rx_buf, "W") == 0) {
                     g_forward_thrust += 10.0f;
                     if(g_forward_thrust > 50.0f) g_forward_thrust = 50.0f;
-                    printf("\n>>> 前进推力 +10%%，当前目标: %.1f %% <<<\n", g_forward_thrust);
+                    ESP_LOGI(TAG, "前进推力 +10%%，当前目标: %.1f %%", g_forward_thrust);
                 } 
                 else if (strcmp(rx_buf, "s") == 0 || strcmp(rx_buf, "S") == 0) {
                     g_forward_thrust -= 10.0f;
                     if(g_forward_thrust < -50.0f) g_forward_thrust = -50.0f;
-                    printf("\n>>> 前进推力 -10%%，当前目标: %.1f %% <<<\n", g_forward_thrust);
+                    ESP_LOGI(TAG, "前进推力 -10%%，当前目标: %.1f %%", g_forward_thrust);
                 } 
                 else if (strcmp(rx_buf, "space") == 0 || rx_buf[0] == ' ') {
                     g_forward_thrust = 0.0f;
-                    printf("\n>>> 推力归零！原地自平衡！ <<<\n");
+                    ESP_LOGI(TAG, "推力归零！原地自平衡！");
                 } 
                 // 校准舵机零点：把舵机摆到正下方（180° 竖直）后输入 'cal'
                 else if (strcmp(rx_buf, "cal") == 0 || strcmp(rx_buf, "CAL") == 0) {
-                    printf("\n>>> [CAL] 开始校准舵机零点（请确认舵机已摆正下方）...\n");
+                    ESP_LOGI(TAG, "[CAL] 开始校准舵机零点（请确认舵机已摆正下方）...");
                     steering_control_calibrate_and_save();
-                    printf(">>> [CAL] 校准完成，已写入 NVS。下次上电将自动加载。 <<<\n");
+                    ESP_LOGI(TAG, "[CAL] 校准完成，已写入 NVS。下次上电将自动加载。");
                 }
                 else if (strcmp(rx_buf, "reboot") == 0 || strcmp(rx_buf, "REBOOT") == 0) {
-                    printf("\n>>> [REBOOT] 1 秒后重启 ESP32... <<<\n");
+                    ESP_LOGW(TAG, "[REBOOT] 1 秒后重启 ESP32...");
                     vTaskDelay(pdMS_TO_TICKS(1000));
                     esp_restart();
                 }
@@ -1045,12 +1137,12 @@ void app_main(void)
                         if (roll_val >  60.0f) roll_val =  60.0f;
                         if (roll_val < -60.0f) roll_val = -60.0f;
                         g_demo_roll_deg = roll_val;
-                        printf("\n>>> [DEMO] 模拟 Roll 设为 %.2f° <<<\n", roll_val);
+                        ESP_LOGI(TAG, "[DEMO] 模拟 Roll 设为 %.2f°", roll_val);
                     } else {
-                        printf("\n>>> 无效 r 命令: %s （用法: r15 / r 15 / r-20） <<<\n", rx_buf);
+                        ESP_LOGW(TAG, "无效 r 命令: %s （用法: r15 / r 15 / r-20）", rx_buf);
                     }
 #else
-                    printf("\n>>> r 命令仅在 MODE_FULL_INTEGRATION + DEMO_MANUAL_ROLL=1 下生效 <<<\n");
+                    ESP_LOGW(TAG, "r 命令仅在 MODE_FULL_INTEGRATION + DEMO_MANUAL_ROLL=1 下生效");
 #endif
                 }
                 // 解析具体数字
@@ -1061,9 +1153,9 @@ void app_main(void)
                         g_forward_thrust = input_val;
                         if(g_forward_thrust > 50.0f) g_forward_thrust = 50.0f;
                         if(g_forward_thrust < -50.0f) g_forward_thrust = -50.0f;
-                        printf("\n>>> 收到绝对推力指令! 目标设为: %.1f %% <<<\n", g_forward_thrust);
+                        ESP_LOGI(TAG, "收到绝对推力指令! 目标设为: %.1f %%", g_forward_thrust);
                     } else {
-                        printf("\n>>> 无效输入: %s <<<\n", rx_buf);
+                        ESP_LOGW(TAG, "无效输入: %s", rx_buf);
                     }
                 }
                 rx_len = 0;
