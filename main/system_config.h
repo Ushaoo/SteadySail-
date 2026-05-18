@@ -132,7 +132,7 @@
 #define THRUST_LEFT_INVERT     0    // 0=正常, 1=反转左推进器输出方向
 #define THRUST_RIGHT_INVERT    0    // 0=正常, 1=反转右推进器输出方向
 
-#define STEER_LEFT_INVERT      1    // 0=正常, 1=反转左舵机 PWM 方向
+#define STEER_LEFT_INVERT      0    // 0=正常, 1=反转左舵机 PWM 方向
 #define STEER_RIGHT_INVERT     1    // 0=正常, 1=反转右舵机 PWM 方向
 
 #define ENC_LEFT_REVERSE       0    // 0=正常, 1=反转左编码器读数（angle = 360 - angle）

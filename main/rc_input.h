@@ -21,3 +21,9 @@ bool rc_input_is_cruising(void);
 
 // 外部主动取消定速（如急停、Blinker操作等）
 void rc_input_cancel_cruise(void);
+
+// 获取最近一次捕获的原始脉宽（μs），无信号时返回 0
+uint32_t rc_input_get_raw_pulse_us(void);
+
+// 打印诊断信息：上升沿/下降沿计数、丢弃次数、最近原始脉宽
+void rc_input_print_diag(void);

@@ -44,6 +44,11 @@ static volatile int64_t  s_rising_us  = 0;    // 上升沿时间戳
 static volatile uint32_t s_pulse_us   = 0;    // 最新合法脉宽（μs）
 static volatile int64_t  s_last_valid_us = 0; // 最近一次合法脉冲的系统时间
 static volatile bool     s_isr_installed = false;
+// 诊断计数器
+static volatile uint32_t s_dbg_rising_cnt  = 0;  // 上升沿次数
+static volatile uint32_t s_dbg_falling_cnt = 0;  // 下降沿次数
+static volatile uint32_t s_dbg_reject_cnt  = 0;  // 脉宽越界被丢弃次数
+static volatile uint32_t s_dbg_last_raw_us = 0;  // 最近一次原始脉宽（含越界值）
 
 // ==================== GPIO ISR ====================
 // 在双边沿中断中：上升沿记时，下降沿算脉宽
@@ -54,13 +59,18 @@ static void IRAM_ATTR rc_gpio_isr(void *arg)
     if (gpio_get_level((gpio_num_t)(intptr_t)arg)) {
         // 上升沿
         s_rising_us = now;
+        s_dbg_rising_cnt++;
     } else {
         // 下降沿：计算脉宽
+        s_dbg_falling_cnt++;
         if (s_rising_us > 0) {
             int64_t width = now - s_rising_us;
+            s_dbg_last_raw_us = (uint32_t)(width > 0xFFFFFFFFLL ? 0xFFFFFFFFu : (uint32_t)width);
             if (width >= RC_PULSE_MIN_US && width <= RC_PULSE_MAX_US) {
                 s_pulse_us       = (uint32_t)width;
                 s_last_valid_us  = now;
+            } else {
+                s_dbg_reject_cnt++;
             }
             s_rising_us = 0;
         }
@@ -194,6 +204,22 @@ float rc_input_get_throttle(void)
 bool rc_input_is_cruising(void)
 {
     return (s_cruise_state == RC_CRUISE_ACTIVE);
+}
+
+uint32_t rc_input_get_raw_pulse_us(void)
+{
+    return s_pulse_us;
+}
+
+void rc_input_print_diag(void)
+{
+    ESP_LOGI(TAG, "[RC诊断] 上升沿:%lu 下降沿:%lu 丢弃:%lu 最近原始脉宽:%luus 合法脉宽:%luus 有效:%s",
+             (unsigned long)s_dbg_rising_cnt,
+             (unsigned long)s_dbg_falling_cnt,
+             (unsigned long)s_dbg_reject_cnt,
+             (unsigned long)s_dbg_last_raw_us,
+             (unsigned long)s_pulse_us,
+             rc_input_is_valid() ? "YES" : "NO");
 }
 
 void rc_input_cancel_cruise(void)

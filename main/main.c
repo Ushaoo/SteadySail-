@@ -759,6 +759,9 @@ void control_core_task(void *pvParameters) {
             float dbg_heading = 0.0f;
             bno055_get_heading(&dbg_heading);
 
+            // 摇杆诊断信息（含上/下沿计数器、丢弃计数、原始脉宽）
+            rc_input_print_diag();
+
             if (rc_input_is_cruising() && g_heading_hold_active) {
                 // 定速 + 定向：额外显示航向目标→当前
                 printf("Fwd:%.1f%%(CRZ) | L:%.1f\u2192%.1f | R:%.1f\u2192%.1f | SteerPWM:%u/%u | MotorPWM:%u/%u | Roll:%.2f\u00b0 | Hdg:%.1f\u00b0\u2192%.1f\u00b0(HOLD) | EncL:%s EncR:%s\n",
