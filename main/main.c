@@ -835,7 +835,7 @@ void control_core_task(void *pvParameters) {
             bno055_get_heading(&dbg_heading);
 
             // 摇杆诊断信息（含上/下沿计数器、丢弃计数、原始脉宽）
-            rc_input_print_diag();
+            // rc_input_print_diag();
             uint32_t rc_pwm = rc_input_get_raw_pwm();
 
             if (rc_input_is_cruising() && g_heading_hold_active) {
