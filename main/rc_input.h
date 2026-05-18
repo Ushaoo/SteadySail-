@@ -27,3 +27,6 @@ uint32_t rc_input_get_raw_pulse_us(void);
 
 // 打印诊断信息：上升沿/下降沿计数、丢弃次数、最近原始脉宽
 void rc_input_print_diag(void);
+
+// 获取最近一次合法 RC 脉宽（μs，1000~2000），无信号时返回 0
+uint32_t rc_input_get_raw_pwm(void);

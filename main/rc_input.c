@@ -126,6 +126,7 @@ float rc_input_get_throttle(void)
     // 信号丢失：取消定速并归零
     if (!rc_input_is_valid()) {
         s_cruise_state = RC_CRUISE_IDLE;
+        ESP_LOGW(TAG, "RC 信号超时，返回 0 油门并取消定速");
         return 0.0f;
     }
 
@@ -185,15 +186,22 @@ float rc_input_get_throttle(void)
         return raw;
 
     // ---- 定速激活，松手保持 ----
-    case RC_CRUISE_ACTIVE:
-        if (raw == 0.0f) {
-            // 拨杆在中位：维持定速値
+    case RC_CRUISE_ACTIVE: {
+        static int s_cancel_count = 0;
+        if (raw < 10.0f && raw > -10.0f) {
+            // 拨杆在中位：维持定速值
+            s_cancel_count = 0;
             return s_cruise_value;
         }
-        // 任意非零输入：取消定速，回 IDLE 等待拆杆归零后重新计时
-        s_cruise_state = RC_CRUISE_IDLE;
-        ESP_LOGI(TAG, "定速取消，等待归中后重新计时");
-        return raw;
+        // 连续 3 次非零才真正取消，防止单帧噪声误触发
+        if (++s_cancel_count >= 3) {
+            s_cancel_count = 0;
+            s_cruise_state = RC_CRUISE_IDLE;
+            ESP_LOGI(TAG, "定速取消，等待归中后重新计时");
+            return raw;
+        }
+        return s_cruise_value;
+    }
 
     default:
         s_cruise_state = RC_CRUISE_IDLE;
@@ -225,4 +233,10 @@ void rc_input_print_diag(void)
 void rc_input_cancel_cruise(void)
 {
     s_cruise_state = RC_CRUISE_IDLE;
+}
+
+uint32_t rc_input_get_raw_pwm(void)
+{
+    if (!rc_input_is_valid()) return 0;
+    return s_pulse_us;
 }
