@@ -12,6 +12,7 @@
 #include <math.h>
 #if ENC_USE_SPI
 #include "driver/spi_master.h"
+#include "freertos/semphr.h"
 #endif
 
 static const char *TAG = "STEERING";
@@ -65,6 +66,8 @@ static portMUX_TYPE enc_mux = portMUX_INITIALIZER_UNLOCKED;
 // ============================================================
 static spi_device_handle_t spi_dev_left  = NULL;
 static spi_device_handle_t spi_dev_right = NULL;
+// SPI 总线互斥信号量：防止 control_core_task 和 encoder_spi_raw_print_task 并发调用 spi_device_transmit
+static SemaphoreHandle_t s_spi_mutex = NULL;
 // SPI 模式下编码器有效状态（上次读取结果）
 static bool spi_valid_left  = false;
 static bool spi_valid_right = false;
@@ -178,6 +181,18 @@ static float compute_angle(volatile uint32_t high_us, volatile uint32_t period_u
 //   Byte5:   CRC[7:0]             (寄存器 0x006，可选校验)
 //
 // 角度公式：θ = ANGLE[14:0] / 32768 * 360°  (15-bit，数据手册 Section 8.6.7)
+
+// CRC-8 (poly=0x07, init=0x00) — 覆盖 rx[2..4]，与 MT6826S 数据手册 Section 8.6.8 一致
+static uint8_t calc_crc8(const uint8_t *data, int len) {
+    uint8_t crc = 0x00;
+    for (int i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (int b = 0; b < 8; b++)
+            crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x07) : (uint8_t)(crc << 1);
+    }
+    return crc;
+}
+
 static float spi_read_encoder(spi_device_handle_t dev, bool *valid_out) {
     if (dev == NULL) { *valid_out = false; return -1.0f; }
     // init 完成后，如果该侧编码器在 init 期间从未有过有效读数，则表明没有连接，直接跳过
@@ -195,8 +210,19 @@ static float spi_read_encoder(spi_device_handle_t dev, bool *valid_out) {
         .rx_buffer = rx_buf,
     };
 
+    if (s_spi_mutex) xSemaphoreTake(s_spi_mutex, portMAX_DELAY);
     esp_err_t ret = spi_device_transmit(dev, &t);
+    if (s_spi_mutex) xSemaphoreGive(s_spi_mutex);
     if (ret != ESP_OK) { *valid_out = false; return -1.0f; }
+
+    // CRC 校验：rx[2..4] → 对比 rx[5]
+    uint8_t crc_calc = calc_crc8(&rx_buf[2], 3);
+    if (rx_buf[5] != crc_calc) {
+        ESP_LOGW(TAG, "[ENC %s] CRC mismatch calc=%02X recv=%02X",
+                 dev == spi_dev_left ? "L" : "R", crc_calc, rx_buf[5]);
+        *valid_out = false;
+        return -1.0f;
+    }
 
     uint8_t angle_h = rx_buf[2];        // ANGLE[14:7]
     uint8_t angle_l = rx_buf[3];        // ANGLE[6:0] in bits[7:1], bit0 固定 0
@@ -325,6 +351,10 @@ void steering_control_init(void) {
         .max_transfer_sz = 6,             // 每次 6 字节 = 48 bit
     };
     ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &bus_cfg, SPI_DMA_DISABLED));
+
+    // 创建 SPI 总线互斥锁（必须在任何任务启动前就绪）
+    s_spi_mutex = xSemaphoreCreateMutex();
+    configASSERT(s_spi_mutex != NULL);
 
     // MISO 加软件上拉：编码器未接时 MISO 浮空，上拉后读到全 1，STATUS≠0，稳定报 invalid
     gpio_set_pull_mode(PIN_SPI_MISO, GPIO_PULLUP_ONLY);
@@ -594,6 +624,27 @@ void steering_control_get_encoder_status(bool *left_ok, bool *right_ok) {
 #else
     *left_ok  = spi_valid_left;
     *right_ok = spi_valid_right;
+#endif
+}
+
+bool steering_control_spi_read_raw(int side, uint8_t rx_out[6]) {
+#if ENC_USE_SPI
+    spi_device_handle_t dev = (side == 0) ? spi_dev_left : spi_dev_right;
+    if (dev == NULL) return false;
+
+    static const uint8_t tx_buf[6] = {0xA0, 0x03, 0x00, 0x00, 0x00, 0x00};
+    spi_transaction_t t = {
+        .length    = 48,
+        .tx_buffer = tx_buf,
+        .rx_buffer = rx_out,
+    };
+    if (s_spi_mutex) xSemaphoreTake(s_spi_mutex, portMAX_DELAY);
+    esp_err_t ret = spi_device_transmit(dev, &t);
+    if (s_spi_mutex) xSemaphoreGive(s_spi_mutex);
+    return (ret == ESP_OK);
+#else
+    (void)side; (void)rx_out;
+    return false;
 #endif
 }
 

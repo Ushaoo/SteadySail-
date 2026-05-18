@@ -29,6 +29,12 @@ void steering_control_get_current_angles(float *left_deg, float *right_deg);
 // 获取编码器健康状态 (true = 正常, false = 故障/断连)
 void steering_control_get_encoder_status(bool *left_ok, bool *right_ok);
 
+// 读取编码器原始 SPI 6 字节响应（仅 ENC_USE_SPI=1 时有效）
+//   side: 0 = 左编码器, 1 = 右编码器
+//   rx_out: 调用方提供的 6 字节缓冲区，填入 SPI 收到的原始数据
+//   返回: true = 传输成功, false = SPI 传输失败或不支持
+bool steering_control_spi_read_raw(int side, uint8_t rx_out[6]);
+
 // 执行一次 PID 计算并输出到 PWM。需放置于 100Hz 定时任务中！
 void steering_control_update(void);
 
