@@ -349,6 +349,7 @@ void steering_control_init(void) {
 
     // SPI 上电后等待 MT6826S OCF 就绪（通常 < 50ms）
     {
+        // ESP_LOGI("SPI", "MT6826S raw: 0x%02X 0x%02X", rx[0], rx[1]);
         ESP_LOGI(TAG, "等待编码器就绪 (最多 500ms)...");
         TickType_t t0 = xTaskGetTickCount();
         const TickType_t TIMEOUT = pdMS_TO_TICKS(500);

@@ -97,7 +97,7 @@ esp_err_t bno055_init(void)
         i2c_cmd_link_delete(scan_cmd);
         if (scan_ret == ESP_OK) {
             ESP_LOGI(TAG, "  发现设备: 0x%02X", addr);
-            if (addr == 0x28 || addr == 0x29) found_addr = addr;
+            if (addr == 0x28 || addr == 0x29 || addr == 0x2A) found_addr = addr;
         }
     }
     if (found_addr == 0) {
@@ -219,5 +219,22 @@ esp_err_t bno055_get_gyro_x(float *gyrox_dps)
     // 有符号 16 位，单位 1/16 °/s（UNIT_SEL bit1=0 时）
     int16_t raw = (int16_t)((uint16_t)buf[1] << 8 | buf[0]);
     *gyrox_dps = (float)raw / 16.0f;
+    return ESP_OK;
+}
+
+esp_err_t bno055_get_linear_accel(float *ax, float *ay, float *az)
+{
+    // LIA_Data 寄存器：0x28~0x2D（X_LSB, X_MSB, Y_LSB, Y_MSB, Z_LSB, Z_MSB）
+    // NDOF 模式已去除重力；UNIT_SEL bit0=0 → 1 LSB = 1/100 m/s²
+    uint8_t buf[6];
+    esp_err_t err = bno055_read_bytes(0x28, buf, 6);
+    if (err != ESP_OK) return err;
+
+    int16_t rx = (int16_t)((uint16_t)buf[1] << 8 | buf[0]);
+    int16_t ry = (int16_t)((uint16_t)buf[3] << 8 | buf[2]);
+    int16_t rz = (int16_t)((uint16_t)buf[5] << 8 | buf[4]);
+    *ax = (float)rx / 100.0f;
+    *ay = (float)ry / 100.0f;
+    *az = (float)rz / 100.0f;
     return ESP_OK;
 }
