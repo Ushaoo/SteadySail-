@@ -1016,6 +1016,21 @@ void app_main(void)
                         rx_len = 0;
                         continue;
                     }
+                    if (strcmp(rx_buf, "mag") == 0 || strcmp(rx_buf, "MAG") == 0) {
+                        ESP_LOGI(TAG, "[MAG] 读取并保存 BNO055 校准 profile...");
+                        esp_err_t err = bno055_calibrate_and_save();
+                        if (err == ESP_OK) ESP_LOGI(TAG, "[MAG] 完成，下次上电自动加载。");
+                        else               ESP_LOGE(TAG, "[MAG] 失败: %s", esp_err_to_name(err));
+                        rx_len = 0;
+                        continue;
+                    }
+                    if (strcmp(rx_buf, "magstat") == 0 || strcmp(rx_buf, "MAGSTAT") == 0) {
+                        uint8_t s,g,a,m;
+                        if (bno055_get_calib_status(&s,&g,&a,&m) == ESP_OK)
+                            ESP_LOGI(TAG, "[MAG] Sys=%d Gyr=%d Acc=%d Mag=%d (3=已校准)", s,g,a,m);
+                        rx_len = 0;
+                        continue;
+                    }
                     if (strcmp(rx_buf, "stop") == 0 || strcmp(rx_buf, "STOP") == 0) {
                         g_enc_cal_mode = !g_enc_cal_mode;
                         if (g_enc_cal_mode) {
@@ -1070,6 +1085,15 @@ void app_main(void)
                             ESP_LOGI(TAG, "[CAL] 开始校准舵机零点...");
                             steering_control_calibrate_and_save();
                             ESP_LOGI(TAG, "[CAL] 校准完成。");
+                        } else if (strcmp(rx_buf, "mag") == 0 || strcmp(rx_buf, "MAG") == 0) {
+                            ESP_LOGI(TAG, "[MAG] 读取并保存 BNO055 校准 profile...");
+                            esp_err_t err = bno055_calibrate_and_save();
+                            if (err == ESP_OK) ESP_LOGI(TAG, "[MAG] 完成，下次上电自动加载。");
+                            else               ESP_LOGE(TAG, "[MAG] 失败: %s", esp_err_to_name(err));
+                        } else if (strcmp(rx_buf, "magstat") == 0 || strcmp(rx_buf, "MAGSTAT") == 0) {
+                            uint8_t s,g,a,m;
+                            if (bno055_get_calib_status(&s,&g,&a,&m) == ESP_OK)
+                                ESP_LOGI(TAG, "[MAG] Sys=%d Gyr=%d Acc=%d Mag=%d (3=已校准)", s,g,a,m);
                         } else if (strcmp(rx_buf, "stop") == 0 || strcmp(rx_buf, "STOP") == 0) {
                             g_enc_cal_mode = !g_enc_cal_mode;
                             if (g_enc_cal_mode) {
@@ -1144,6 +1168,19 @@ void app_main(void)
                     ESP_LOGI(TAG, "[CAL] 开始校准舵机零点（请确认舵机已摆正下方）...");
                     steering_control_calibrate_and_save();
                     ESP_LOGI(TAG, "[CAL] 校准完成，已写入 NVS。下次上电将自动加载。");
+                }
+                // 保存 BNO055 校准 profile：先做 8 字晃动让 Mag=3，再输入 'mag'
+                else if (strcmp(rx_buf, "mag") == 0 || strcmp(rx_buf, "MAG") == 0) {
+                    ESP_LOGI(TAG, "[MAG] 读取并保存 BNO055 校准 profile...");
+                    esp_err_t err = bno055_calibrate_and_save();
+                    if (err == ESP_OK) ESP_LOGI(TAG, "[MAG] 完成，下次上电自动加载。");
+                    else               ESP_LOGE(TAG, "[MAG] 失败: %s", esp_err_to_name(err));
+                }
+                // 查询 BNO055 实时校准等级（每项 0~3）
+                else if (strcmp(rx_buf, "magstat") == 0 || strcmp(rx_buf, "MAGSTAT") == 0) {
+                    uint8_t s,g,a,m;
+                    if (bno055_get_calib_status(&s,&g,&a,&m) == ESP_OK)
+                        ESP_LOGI(TAG, "[MAG] Sys=%d Gyr=%d Acc=%d Mag=%d (3=已校准)", s,g,a,m);
                 }
                 // 编码器校准模式开关：小电机停止输出，方便手动摆正后再输入 'cal'
                 else if (strcmp(rx_buf, "stop") == 0 || strcmp(rx_buf, "STOP") == 0) {

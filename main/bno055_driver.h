@@ -46,4 +46,35 @@ esp_err_t bno055_get_gyro_x(float *gyrox_dps);
  */
 esp_err_t bno055_get_linear_accel(float *ax, float *ay, float *az);
 
+/**
+ * @brief 读取 BNO055 的实时校准等级（每项 0~3，3=完全校准）
+ * @param[out] sys/gyr/acc/mag  各子系统校准等级，传 NULL 可忽略
+ * @return ESP_OK 成功
+ */
+esp_err_t bno055_get_calib_status(uint8_t *sys, uint8_t *gyr, uint8_t *acc, uint8_t *mag);
+
+/**
+ * @brief 读取当前 22 字节校准 profile（寄存器 0x55~0x6A）。
+ *        调用方必须保证芯片已处于 CONFIG 模式。
+ */
+esp_err_t bno055_read_calib_profile(uint8_t buf[22]);
+
+/**
+ * @brief 把 22 字节校准 profile 写回芯片。必须在 CONFIG 模式下调用。
+ */
+esp_err_t bno055_write_calib_profile(const uint8_t buf[22]);
+
+/**
+ * @brief 一键：读当前 calib profile → 存 NVS。
+ *        内部自动 CONFIG ↔ NDOF 切换。下次上电由 bno055_init() 自动恢复。
+ *        建议先让用户做 8 字晃动使 Mag/Sys = 3 后再调用。
+ */
+esp_err_t bno055_calibrate_and_save(void);
+
+/**
+ * @brief 启动时从 NVS 加载 calib profile 并写回芯片。
+ * @return ESP_OK 成功；ESP_ERR_NOT_FOUND 表示 NVS 中无数据。
+ */
+esp_err_t bno055_load_calib_from_nvs(void);
+
 #endif // BNO055_DRIVER_H

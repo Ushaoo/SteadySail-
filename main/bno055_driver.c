@@ -4,8 +4,25 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "nvs_flash.h"
+#include "nvs.h"
+
+
+/*
+串口输入 magstat 查实时校准等级（每项 0~3）。
+设备做"8 字"晃动直到 Mag=3、Sys=3。
+输入 mag → 22 字节 calib profile 写入 NVS（namespace bno055 / key cal22）。
+重启后 bno055_init() 自动恢复，无需再校。
+*/
+
 
 static const char *TAG = "BNO055";
+
+// NVS namespace / key（22 字节校准 blob）
+#define BNO_NVS_NS              "bno055"
+#define BNO_NVS_KEY_CAL         "cal22"
+#define BNO055_CALIB_DATA_ADDR  0x55   // ACC/MAG/GYR offset + radius 共 22 字节
+#define BNO055_CALIB_STAT_ADDR  0x35
 
 // ==================== 寄存器地址 ====================
 #define BNO055_CHIP_ID_ADDR      0x00   // 固定值 0xA0，用于芯片识别
@@ -175,6 +192,13 @@ esp_err_t bno055_init(void)
              roll_raw, roll_raw / 16.0f,
              hdg_raw, hdg_raw / 16.0f);
 
+    // 9. 尝试从 NVS 加载历史校准 profile（自动恢复磁力计/加速度计/陀螺仪偏置）
+    if (bno055_load_calib_from_nvs() == ESP_OK) {
+        ESP_LOGI(TAG, "✓ BNO055 校准 profile 已从 NVS 恢复");
+    } else {
+        ESP_LOGW(TAG, "⚠ 未发现 BNO055 校准数据。请做 8 字晃动直到 Mag=3，再串口输入 'mag' 保存。");
+    }
+
     ESP_LOGI(TAG, "✓ BNO055 初始化完成，NDOF 模式运行中");
     return ESP_OK;
 }
@@ -230,7 +254,121 @@ esp_err_t bno055_get_linear_accel(float *ax, float *ay, float *az)
     esp_err_t err = bno055_read_bytes(0x28, buf, 6);
     if (err != ESP_OK) return err;
 
-    int16_t rx = (int16_t)((uint16_t)buf[1] << 8 | buf[0]);
+ 
+
+// ========================================================
+// 校准 profile 持久化（与 steering encoder NVS 范式一致）
+// ========================================================
+
+esp_err_t bno055_get_calib_status(uint8_t *sys, uint8_t *gyr, uint8_t *acc, uint8_t *mag)
+{
+    uint8_t s = 0;
+    esp_err_t err = bno055_read_bytes(BNO055_CALIB_STAT_ADDR, &s, 1);
+    if (err != ESP_OK) return err;
+    if (sys) *sys = (s >> 6) & 0x03;
+    if (gyr) *gyr = (s >> 4) & 0x03;
+    if (acc) *acc = (s >> 2) & 0x03;
+    if (mag) *mag = (s     ) & 0x03;
+    return ESP_OK;
+}
+
+esp_err_t bno055_read_calib_profile(uint8_t buf[22])
+{
+    return bno055_read_bytes(BNO055_CALIB_DATA_ADDR, buf, 22);
+}
+
+esp_err_t bno055_write_calib_profile(const uint8_t buf[22])
+{
+    // 数据手册要求逐字节写入（无 burst write 支持的明确说明，稳妥起见单字节）
+    for (int i = 0; i < 22; i++) {
+        esp_err_t e = bno055_write_byte(BNO055_CALIB_DATA_ADDR + i, buf[i]);
+        if (e != ESP_OK) return e;
+    }
+    return ESP_OK;
+}
+
+// 内部辅助：切换 OPR_MODE 并等待对应延时
+static esp_err_t bno_set_mode(uint8_t mode, uint32_t delay_ms)
+{
+    esp_err_t err = bno055_write_byte(BNO055_OPR_MODE_ADDR, mode);
+    if (err != ESP_OK) return err;
+    vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    return ESP_OK;
+}
+
+esp_err_t bno055_calibrate_and_save(void)
+{
+    // 1. 打印当前校准等级供用户参考
+    uint8_t sys = 0, gyr = 0, acc = 0, mag = 0;
+    if (bno055_get_calib_status(&sys, &gyr, &acc, &mag) != ESP_OK) {
+        ESP_LOGE(TAG, "读取 CALIB_STAT 失败");
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "当前校准等级: Sys=%d Gyr=%d Acc=%d Mag=%d (0~3, 3=已校准)",
+             sys, gyr, acc, mag);
+    if (mag < 3) {
+        ESP_LOGW(TAG, "⚠ 磁力计未完全校准 (Mag=%d/3)；仍将保存当前进度。建议做 8 字晃动后再保存。", mag);
+    }
+
+    // 2. 切到 CONFIG 模式才能读出有效的 calib profile
+    if (bno_set_mode(BNO055_OPR_MODE_CONFIG, 25) != ESP_OK) {
+        ESP_LOGE(TAG, "切换 CONFIG 失败");
+        return ESP_FAIL;
+    }
+
+    uint8_t profile[22] = {0};
+    esp_err_t err = bno055_read_calib_profile(profile);
+
+    // 3. 无论成功失败都切回 NDOF
+    bno_set_mode(BNO055_OPR_MODE_NDOF, 20);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "读 calib profile 失败: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    // 4. 写入 NVS
+    nvs_handle_t h;
+    err = nvs_open(BNO_NVS_NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_open 失败: %s", esp_err_to_name(err));
+        return err;
+    }
+    err = nvs_set_blob(h, BNO_NVS_KEY_CAL, profile, 22);
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "✓ BNO055 校准 22 字节已写入 NVS（重启自动加载，无需再次校准）");
+    } else {
+        ESP_LOGE(TAG, "✗ 写 NVS 失败: %s", esp_err_to_name(err));
+    }
+    return err;
+}
+
+esp_err_t bno055_load_calib_from_nvs(void)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(BNO_NVS_NS, NVS_READONLY, &h);
+    if (err != ESP_OK) return ESP_ERR_NOT_FOUND;
+
+    uint8_t profile[22] = {0};
+    size_t len = sizeof(profile);
+    err = nvs_get_blob(h, BNO_NVS_KEY_CAL, profile, &len);
+    nvs_close(h);
+    if (err != ESP_OK || len != 22) return ESP_ERR_NOT_FOUND;
+
+    // 写回 22 字节必须在 CONFIG 模式
+    if (bno_set_mode(BNO055_OPR_MODE_CONFIG, 25) != ESP_OK) return ESP_FAIL;
+    err = bno055_write_calib_profile(profile);
+    bno_set_mode(BNO055_OPR_MODE_NDOF, 20);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "写回 calib profile 失败: %s", esp_err_to_name(err));
+        return err;
+    }
+    return ESP_OK;
+}   int16_t rx = (int16_t)((uint16_t)buf[1] << 8 | buf[0]);
     int16_t ry = (int16_t)((uint16_t)buf[3] << 8 | buf[2]);
     int16_t rz = (int16_t)((uint16_t)buf[5] << 8 | buf[4]);
     *ax = (float)rx / 100.0f;
