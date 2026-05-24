@@ -49,6 +49,10 @@ volatile bool g_estop_active = false;
 //   与 g_estop_active 的区别：后者仍会跟 180° 舵机目标 (连续舵 1500us 才是"不转")。
 volatile bool g_hard_estop = false;
 
+// 编码器校准模式：true = 小电机停止输出（PWM 锁 1500），供手动摆正后输入 cal 校准
+// 串口输入 'stop' 切换开/关
+volatile bool g_enc_cal_mode = false;
+
 // 磁控重启标志：磁铁重新吸合（上升沿）时由 ISR 置位，由 control_core_task 检测后重启
 volatile bool g_mag_restart_pending = false;
 // IMU 专用测试任务 (100Hz)
@@ -815,7 +819,12 @@ void control_core_task(void *pvParameters) {
         }
 
         // 统一更新小电机位置 (下发滤波后的 PWM)
-        steering_control_update(); 
+        if (g_enc_cal_mode) {
+            // 编码器校准模式：锁住小电机，方便手动摆正后输入 'cal' 校准零点
+            motor_control_set_steering_pwm(1500, 1500);
+        } else {
+            steering_control_update();
+        }
 
         // 串口实时数据监测 (每 10 帧打一条，10Hz)
         static int print_cnt = 0;
@@ -1007,6 +1016,16 @@ void app_main(void)
                         rx_len = 0;
                         continue;
                     }
+                    if (strcmp(rx_buf, "stop") == 0 || strcmp(rx_buf, "STOP") == 0) {
+                        g_enc_cal_mode = !g_enc_cal_mode;
+                        if (g_enc_cal_mode) {
+                            ESP_LOGW(TAG, "[ENC_CAL] 编码器校准模式 已开启 - 小电机停止输出，请手动摆正舵机后输入 'cal' 保存零点");
+                        } else {
+                            ESP_LOGW(TAG, "[ENC_CAL] 编码器校准模式 已关闭 - 小电机恢复正常控制");
+                        }
+                        rx_len = 0;
+                        continue;
+                    }
                     if (strcmp(rx_buf, "reboot") == 0 || strcmp(rx_buf, "REBOOT") == 0) {
                         ESP_LOGW(TAG, "[REBOOT] 1 秒后重启 ESP32...");
                         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -1051,6 +1070,13 @@ void app_main(void)
                             ESP_LOGI(TAG, "[CAL] 开始校准舵机零点...");
                             steering_control_calibrate_and_save();
                             ESP_LOGI(TAG, "[CAL] 校准完成。");
+                        } else if (strcmp(rx_buf, "stop") == 0 || strcmp(rx_buf, "STOP") == 0) {
+                            g_enc_cal_mode = !g_enc_cal_mode;
+                            if (g_enc_cal_mode) {
+                                ESP_LOGW(TAG, "[ENC_CAL] 编码器校准模式 已开启 - 小电机停止输出，请手动摆正舵机后输入 'cal' 保存零点");
+                            } else {
+                                ESP_LOGW(TAG, "[ENC_CAL] 编码器校准模式 已关闭 - 小电机恢复正常控制");
+                            }
                         } else if (strcmp(rx_buf, "reboot") == 0 || strcmp(rx_buf, "REBOOT") == 0) {
                             ESP_LOGW(TAG, "[REBOOT] 1 秒后重启...");
                             vTaskDelay(pdMS_TO_TICKS(1000));
@@ -1118,6 +1144,15 @@ void app_main(void)
                     ESP_LOGI(TAG, "[CAL] 开始校准舵机零点（请确认舵机已摆正下方）...");
                     steering_control_calibrate_and_save();
                     ESP_LOGI(TAG, "[CAL] 校准完成，已写入 NVS。下次上电将自动加载。");
+                }
+                // 编码器校准模式开关：小电机停止输出，方便手动摆正后再输入 'cal'
+                else if (strcmp(rx_buf, "stop") == 0 || strcmp(rx_buf, "STOP") == 0) {
+                    g_enc_cal_mode = !g_enc_cal_mode;
+                    if (g_enc_cal_mode) {
+                        ESP_LOGW(TAG, "[ENC_CAL] 编码器校准模式 已开启 - 小电机停止输出，请手动摆正舵机后输入 'cal' 保存零点");
+                    } else {
+                        ESP_LOGW(TAG, "[ENC_CAL] 编码器校准模式 已关闭 - 小电机恢复正常控制");
+                    }
                 }
                 else if (strcmp(rx_buf, "reboot") == 0 || strcmp(rx_buf, "REBOOT") == 0) {
                     ESP_LOGW(TAG, "[REBOOT] 1 秒后重启 ESP32...");
