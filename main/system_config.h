@@ -13,7 +13,7 @@
 #define MODE_TEST_ENCODER_SPI    6  // 🔍编码器 SPI 原始数据专用测试：所有控制功能正常，仅输出 SPI 原始字节
 
 // 当前激活的模式 (编译前修改这里)
-#define CURRENT_RUN_MODE   MODE_FULL_INTEGRATION
+#define CURRENT_RUN_MODE   3
 
 #define MAIN_PRINT_INTERVAL  10  // 串口实时数据监测频率（帧数间隔，100Hz/10=10Hz）
 

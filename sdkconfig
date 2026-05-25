@@ -189,8 +189,8 @@ CONFIG_BLINKER_DEFAULT_CONFIG=y
 #
 # Blinker Default Config
 #
-CONFIG_BLINKER_WIFI_SSID="iPhone Ushao"
-CONFIG_BLINKER_WIFI_PASSWORD="25342922lcf"
+CONFIG_BLINKER_WIFI_SSID="不锈钢镶边磨砂平滑玻"
+CONFIG_BLINKER_WIFI_PASSWORD="11111111"
 # end of Blinker Default Config
 # end of Blinker Provisioning Config
 

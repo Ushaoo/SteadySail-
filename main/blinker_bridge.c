@@ -28,6 +28,7 @@ extern volatile float g_demo_roll_deg;   // DEMO_MANUAL_ROLL 手动横滚角输�
 extern volatile int   g_turn_state;       // 差速转向状态：-1=左/0=直/+1=右
 extern volatile bool  g_heading_hold_active; // 航向保持开关（BNO055）
 extern volatile float g_target_heading;      // 目标偏航角（0~360°）
+extern volatile bool  g_enc_cal_mode;        // 编码器校准模式：小电机锁停，便于手动摆正
 
 // ============================================================
 // 控件键名（与 Blinker App 面板上的控件键名一致）
@@ -109,7 +110,20 @@ static bool try_parse_and_apply_pid(const char *raw)
 {
     if (raw == NULL) return false;
 
-    // 优先匹配整字串命令：reboot（不区分大小写）
+    // 优先匹配整字串命令：stop / reboot（不区分大小写）
+    {
+        const char *needle = "stop";
+        size_t nlen = strlen(needle);
+        for (const char *s = raw; *s; s++) {
+            size_t i = 0;
+            while (i < nlen && s[i] && tolower((unsigned char)s[i]) == needle[i]) i++;
+            if (i == nlen) {
+                motor_control_set_steering_pwm(1500, 1500);
+                ESP_LOGW(TAG, "[App] 收到 stop 指令，小电机已停止（1500us）");
+                return true;
+            }
+        }
+    }
     {
         const char *needle = "reboot";
         size_t nlen = strlen(needle);
@@ -360,18 +374,22 @@ static void on_fwd_n30(const blinker_widget_param_val_t *val)
 }
 
 // ============================================================
-// 硬急停 —— tap 立即把 4 个通道全部压到 1500us
-//   与原 estop 的区别：原 estop 会拿舵机走到 180°（连续舵会转动），
-//   硬急停是舵机 PWM = 1500us 即"不转"。需要手动下电才能恢复。
+// hard_stop 按钮 —— tap 切换 g_enc_cal_mode（编码器校准模式开/关）
+//   开启时：control_core_task 跳过 steering_control_update()，转向 PWM 锁到 1500us，
+//           便于手动摆正舵机后输入 'cal' 校准零点。
+//   关闭时：恢复正常 PID 控制。
 // ============================================================
 static void on_hard_stop(const blinker_widget_param_val_t *val)
 {
     (void)val;
-    g_hard_estop = true;
-    g_estop_active = true;          // 下一轮主循环看到 hard_estop 会直接 continue
-    g_forward_thrust = 0.0f;        // 清推力以防下次启动跳变
-    g_turn_state = 0;
-    ESP_LOGW(TAG, "[App] 硬急停！所有通道已锁定为 1500us");
+    g_enc_cal_mode = !g_enc_cal_mode;
+    if (g_enc_cal_mode) {
+        // 立即把转向 PWM 压到 1500，避免等待下一个控制周期
+        motor_control_set_steering_pwm(1500, 1500);
+        ESP_LOGW(TAG, "[App] 编码器校准模式 已开启 - 小电机停止输出");
+    } else {
+        ESP_LOGW(TAG, "[App] 编码器校准模式 已关闭 - 小电机恢复正常控制");
+    }
 }
 
 // ============================================================
@@ -390,10 +408,9 @@ static void on_reboot(const blinker_widget_param_val_t *val)
 }
 
 // ============================================================
-// 在线校准按钮 —— 只接受长按 (pressup)，避免误触
-//   tap     -> 仅提示“请长按”，不执行
-//   press   -> 忽略（按下瞬间）
-//   pressup -> 执行校准：拍下当前舵机位置作为新的 180°基准，并写入 NVS
+// 在线校准按钮 —— tap 即触发：直接调用 steering_control_calibrate_and_save()
+//   建议先用 hard_stop 按钮开启编码器校准模式（g_enc_cal_mode=true）锁停小电机，
+//   手动把舵机摆到 180° 基准位后再按本按钮拍取零点。
 //
 //   ⚠使用前提：按之前必须亲眼确认两个推进器桃子均垂直向下，
 //      否则会把错误位置当成新基准，下次开机依然会错。
@@ -401,26 +418,14 @@ static void on_reboot(const blinker_widget_param_val_t *val)
 // ============================================================
 static void on_cal(const blinker_widget_param_val_t *val)
 {
-    if (val == NULL || val->s == NULL) {
-        ESP_LOGW(TAG, "[App] 校准按钮 val 为空");
-        return;
-    }
-    const char *s = val->s;
+    (void)val;
+    ESP_LOGW(TAG, "[App] 收到校准命令 -> 锁停小/大电机并拍取当前位置为新基准");
 
-    if (strcasecmp(s, "tap") == 0) {
-        ESP_LOGW(TAG, "[App] 校准按钮误触？请长按 1 秒才生效");
-        return;
-    }
-    if (strcasecmp(s, "press") == 0) {
-        // 按下瞬间不动作，等 pressup
-        return;
-    }
-    if (strcasecmp(s, "pressup") != 0) {
-        ESP_LOGW(TAG, "[App] 校准按钮未知事件: '%s' （仅 pressup 生效）", s);
-        return;
-    }
+    // 拉起编码器校准模式，锁停小电机（control_core_task 会跳过 PID 直接 1500us）
+    bool prev_cal_mode = g_enc_cal_mode;
+    g_enc_cal_mode = true;
+    motor_control_set_steering_pwm(1500, 1500);   // 立即生效，不等下一控制周期
 
-    ESP_LOGW(TAG, "[App] 收到长按校准命令 -> 暂停推进并拍取当前位置为新基准");
     // 临时压下硬急停，锁住 4 路 PWM，避免 PID 与校准赛跑
     bool prev_hard = g_hard_estop;
     g_hard_estop = true;
@@ -428,8 +433,9 @@ static void on_cal(const blinker_widget_param_val_t *val)
 
     steering_control_calibrate_and_save();
 
-    // 恢复屏蔽状态（一般 prev_hard 应为 false；如果之前本来就在硬急停，保留之）
-    g_hard_estop = prev_hard;
+    // 恢复屏蔽状态（一般 prev_* 应为 false；如果之前本来就在该状态，保留之）
+    g_hard_estop   = prev_hard;
+    g_enc_cal_mode = prev_cal_mode;
     ESP_LOGW(TAG, "[App] 校准完成，系统息复运行");
 }
 
