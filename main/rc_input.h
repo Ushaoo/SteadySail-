@@ -16,7 +16,7 @@ float rc_input_get_throttle(void);
 // 信号有效性：最近 RC_SIGNAL_TIMEOUT_MS 内收到过合法脉冲
 bool rc_input_is_valid(void);
 
-// 是否正处于定速巡航状态（拨杆松手后定速生效）
+// 是否正处于定速巡航状态（锁定后向零点回撤 20 点触发定速）
 bool rc_input_is_cruising(void);
 
 // 外部主动取消定速（如急停、Blinker操作等）

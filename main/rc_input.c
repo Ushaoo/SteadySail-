@@ -23,15 +23,16 @@ static const char *TAG = "RC_INPUT";
 #define RC_SIGNAL_TIMEOUT_MS 200
 
 // ==================== 定速巡航参数 ====================
-#define RC_CRUISE_SETTLE_US  2000000LL  // 拨杆稳定 2s 后触发定速
-#define RC_CRUISE_TOL_PCT    5.0f       // 定速追踪容差 ±5%
+#define RC_CRUISE_SETTLE_US         2000000LL  // 拨杆稳定 2s 后锁定定速值
+#define RC_CRUISE_TOL_PCT           5.0f       // 定速追踪容差 ±5%
+#define RC_CRUISE_ENGAGE_RETREAT_PCT 20.0f     // 锁定后向零点回撤 20 个百分点触发定速
 
 // ==================== 定速状态机 ====================
 typedef enum {
     RC_CRUISE_IDLE,      // 拨杆近中位，无定速
     RC_CRUISE_SETTLING,  // 拨杆非零，计时 2s
-    RC_CRUISE_LATCHED,   // 2s 已到，候松手触发定速
-    RC_CRUISE_ACTIVE,    // 定速激活，松手保持定速值
+    RC_CRUISE_LATCHED,   // 2s 已到，候向零点回撤 20 点触发定速
+    RC_CRUISE_ACTIVE,    // 定速激活，保持定速值直到拨杆达到原设定值才取消
 } rc_cruise_state_t;
 
 static rc_cruise_state_t s_cruise_state    = RC_CRUISE_IDLE;
@@ -167,41 +168,42 @@ float rc_input_get_throttle(void)
             s_settle_start_us = now;
         }
         if ((now - s_settle_start_us) >= RC_CRUISE_SETTLE_US) {
-            // 等待2s，准备定速（松手时生效）
+            // 等待2s，准备定速（向零点回撤 20 点时生效）
             s_cruise_value = s_settle_value;
             s_cruise_state = RC_CRUISE_LATCHED;
-            ESP_LOGI(TAG, "定速候按 (%.1f%%)，松手即生效", s_cruise_value);
+            ESP_LOGI(TAG, "定速候按 (%.1f%%)，向零点回撤 %.1f 点即生效",
+                     s_cruise_value, RC_CRUISE_ENGAGE_RETREAT_PCT);
         }
         return raw;  // 拨杆期间始终跟随拨杆
 
-    // ---- 定速就绪，候松手触发 ----
+    // ---- 定速就绪，候向零点回撤触发 ----
     case RC_CRUISE_LATCHED:
-        if (raw == 0.0f) {
-            // 松手：定速生效
+        if ((s_cruise_value > 0.0f &&
+             raw <= (s_cruise_value + RC_CRUISE_ENGAGE_RETREAT_PCT)) ||
+            (s_cruise_value < 0.0f &&
+             raw >= (s_cruise_value - RC_CRUISE_ENGAGE_RETREAT_PCT))) {
+            // 向零点回撤超过阈值：定速生效
             s_cruise_state = RC_CRUISE_ACTIVE;
             ESP_LOGI(TAG, "定速激活: %.1f%%", s_cruise_value);
             return s_cruise_value;
         }
-        // 拨杆仍在非零区（含松手过程中的瞬态值）：跟随拨杆，等待归零
+        // 未达到触发阈值前，仍跟随拨杆
         return raw;
 
-    // ---- 定速激活，松手保持 ----
-    case RC_CRUISE_ACTIVE: {
-        static int s_cancel_count = 0;
-        if (raw < 10.0f && raw > -10.0f) {
-            // 拨杆在中位：维持定速值
-            s_cancel_count = 0;
-            return s_cruise_value;
-        }
-        // 连续 3 次非零才真正取消，防止单帧噪声误触发
-        if (++s_cancel_count >= 3) {
-            s_cancel_count = 0;
+    // ---- 定速激活，达到原设定值才取消 ----
+    case RC_CRUISE_ACTIVE:
+        if ((s_cruise_value > 0.0f && raw >= s_cruise_value) ||
+            (s_cruise_value < 0.0f && raw <= s_cruise_value)) {
             s_cruise_state = RC_CRUISE_IDLE;
-            ESP_LOGI(TAG, "定速取消，等待归中后重新计时");
+            ESP_LOGI(TAG, "定速取消：摇杆达到原设定值 %.1f%%", s_cruise_value);
+            return raw;
+        }
+        if (s_cruise_value == 0.0f) {
+            // 异常兜底：避免 0 定速值导致状态卡死
+            s_cruise_state = RC_CRUISE_IDLE;
             return raw;
         }
         return s_cruise_value;
-    }
 
     default:
         s_cruise_state = RC_CRUISE_IDLE;
