@@ -18,11 +18,16 @@
 
 static const char *TAG = "BNO055";
 
-// NVS namespace / key（22 字节校准 blob）
+// NVS namespace / key（22 字节校准 blob + 航向零点偏置）
 #define BNO_NVS_NS              "bno055"
 #define BNO_NVS_KEY_CAL         "cal22"
+#define BNO_NVS_KEY_HDG_OFF     "hdg_off"  // float，单位度，0~360
 #define BNO055_CALIB_DATA_ADDR  0x55   // ACC/MAG/GYR offset + radius 共 22 字节
 #define BNO055_CALIB_STAT_ADDR  0x35
+
+// 航向零点偏置：真北 heading = raw_heading - s_hdg_offset_deg（结果归一化到 0~360）
+// 在 bno055_calibrate_and_save() 时被设为"当前 raw 航向"，使船头方向被定义为新的 0°（真北）。
+static volatile float s_hdg_offset_deg = 0.0f;
 
 // ==================== 寄存器地址 ====================
 #define BNO055_CHIP_ID_ADDR      0x00   // 固定值 0xA0，用于芯片识别
@@ -203,22 +208,32 @@ esp_err_t bno055_init(void)
     return ESP_OK;
 }
 
-esp_err_t bno055_get_heading(float *heading_deg)
+// 内部：读取 raw 航向（未应用 s_hdg_offset_deg），单位度，归一化到 0~360
+static esp_err_t bno055_read_raw_heading(float *raw_deg)
 {
     uint8_t buf[2];
     esp_err_t err = bno055_read_bytes(BNO055_EUL_HEADING_LSB, buf, 2);
     if (err != ESP_OK) return err;
-
-    // 合并 LSB + MSB，值为有符号 16 位，单位 1/16 度
     int16_t raw = (int16_t)((uint16_t)buf[1] << 8 | buf[0]);
-    float heading = (float)raw / 16.0f;  // 转换为度
+    float h = (float)raw / 16.0f;
+    while (h < 0.0f)    h += 360.0f;
+    while (h >= 360.0f) h -= 360.0f;
+    *raw_deg = h;
+    return ESP_OK;
+}
 
-    // BNO055 NDOF 模式：Heading 范围 0~360°（顺时针为正）
-    // 对超出范围的值做归一化保护
-    while (heading < 0.0f)    heading += 360.0f;
-    while (heading >= 360.0f) heading -= 360.0f;
+esp_err_t bno055_get_heading(float *heading_deg)
+{
+    float raw;
+    esp_err_t err = bno055_read_raw_heading(&raw);
+    if (err != ESP_OK) return err;
 
-    *heading_deg = heading;
+    // 应用 mag 校准时记下的零点偏置，使"当时的朝向"被视为真北 0°
+    float h = raw - s_hdg_offset_deg;
+    while (h < 0.0f)    h += 360.0f;
+    while (h >= 360.0f) h -= 360.0f;
+
+    *heading_deg = h;
     return ESP_OK;
 }
 
@@ -253,6 +268,15 @@ esp_err_t bno055_get_linear_accel(float *ax, float *ay, float *az)
     uint8_t buf[6];
     esp_err_t err = bno055_read_bytes(0x28, buf, 6);
     if (err != ESP_OK) return err;
+
+    int16_t rx = (int16_t)((uint16_t)buf[1] << 8 | buf[0]);
+    int16_t ry = (int16_t)((uint16_t)buf[3] << 8 | buf[2]);
+    int16_t rz = (int16_t)((uint16_t)buf[5] << 8 | buf[4]);
+    *ax = (float)rx / 100.0f;
+    *ay = (float)ry / 100.0f;
+    *az = (float)rz / 100.0f;
+    return ESP_OK;
+}
 
  
 
@@ -327,7 +351,18 @@ esp_err_t bno055_calibrate_and_save(void)
         return err;
     }
 
-    // 4. 写入 NVS
+    // 4. 捕获当前 raw 航向作为新的"真北"零点偏置
+    //    切回 NDOF 后等一会儿让融合稳定再读，避免读到模式切换中的脏值。
+    vTaskDelay(pdMS_TO_TICKS(150));
+    float raw_hdg = 0.0f;
+    if (bno055_read_raw_heading(&raw_hdg) == ESP_OK) {
+        s_hdg_offset_deg = raw_hdg;
+        ESP_LOGI(TAG, "✓ 已将当前朝向 (raw=%.2f°) 设为真北 0°", raw_hdg);
+    } else {
+        ESP_LOGW(TAG, "读取 raw 航向失败，保留原偏置 %.2f°", s_hdg_offset_deg);
+    }
+
+    // 5. 写入 NVS：22 字节 calib profile + 航向零点偏置
     nvs_handle_t h;
     err = nvs_open(BNO_NVS_NS, NVS_READWRITE, &h);
     if (err != ESP_OK) {
@@ -335,11 +370,15 @@ esp_err_t bno055_calibrate_and_save(void)
         return err;
     }
     err = nvs_set_blob(h, BNO_NVS_KEY_CAL, profile, 22);
+    if (err == ESP_OK) {
+        float off = s_hdg_offset_deg;
+        err = nvs_set_blob(h, BNO_NVS_KEY_HDG_OFF, &off, sizeof(off));
+    }
     if (err == ESP_OK) err = nvs_commit(h);
     nvs_close(h);
 
     if (err == ESP_OK) {
-        ESP_LOGI(TAG, "✓ BNO055 校准 22 字节已写入 NVS（重启自动加载，无需再次校准）");
+        ESP_LOGI(TAG, "✓ BNO055 校准 22 字节 + 航向偏置 %.2f° 已写入 NVS（重启自动加载）", s_hdg_offset_deg);
     } else {
         ESP_LOGE(TAG, "✗ 写 NVS 失败: %s", esp_err_to_name(err));
     }
@@ -355,6 +394,16 @@ esp_err_t bno055_load_calib_from_nvs(void)
     uint8_t profile[22] = {0};
     size_t len = sizeof(profile);
     err = nvs_get_blob(h, BNO_NVS_KEY_CAL, profile, &len);
+
+    // 同时读取航向零点偏置（缺失时保持 0，向后兼容旧版本数据）
+    float off = 0.0f;
+    size_t off_len = sizeof(off);
+    if (nvs_get_blob(h, BNO_NVS_KEY_HDG_OFF, &off, &off_len) == ESP_OK && off_len == sizeof(off)) {
+        s_hdg_offset_deg = off;
+        ESP_LOGI(TAG, "✓ 已加载航向零点偏置 %.2f° (真北方向)", off);
+    } else {
+        ESP_LOGW(TAG, "未发现航向零点偏置，使用 0°（heading 仍为磁北）");
+    }
     nvs_close(h);
     if (err != ESP_OK || len != 22) return ESP_ERR_NOT_FOUND;
 
@@ -367,12 +416,5 @@ esp_err_t bno055_load_calib_from_nvs(void)
         ESP_LOGE(TAG, "写回 calib profile 失败: %s", esp_err_to_name(err));
         return err;
     }
-    return ESP_OK;
-}   int16_t rx = (int16_t)((uint16_t)buf[1] << 8 | buf[0]);
-    int16_t ry = (int16_t)((uint16_t)buf[3] << 8 | buf[2]);
-    int16_t rz = (int16_t)((uint16_t)buf[5] << 8 | buf[4]);
-    *ax = (float)rx / 100.0f;
-    *ay = (float)ry / 100.0f;
-    *az = (float)rz / 100.0f;
     return ESP_OK;
 }
