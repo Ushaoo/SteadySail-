@@ -11,12 +11,13 @@ esp_err_t rc_input_init(int gpio_num);
 
 // 获取油门值：-100.0 ~ +100.0（中位死区内返回 0.0）
 // 超过 RC_SIGNAL_TIMEOUT_MS 无信号时返回 0.0（安全归零）
+// 定速触发后按配置时间平滑回升到锁定值；取消时需先回中，再给非零信号触发缓降到 0
 float rc_input_get_throttle(void);
 
 // 信号有效性：最近 RC_SIGNAL_TIMEOUT_MS 内收到过合法脉冲
 bool rc_input_is_valid(void);
 
-// 是否正处于定速巡航状态（锁定后向零点回撤 20 点触发定速）
+// 是否正处于定速巡航状态（ACTIVATING / ACTIVE 为 true，取消缓降阶段为 false）
 bool rc_input_is_cruising(void);
 
 // 外部主动取消定速（如急停、Blinker操作等）

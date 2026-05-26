@@ -4,6 +4,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "system_config.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <math.h>
@@ -32,13 +33,20 @@ typedef enum {
     RC_CRUISE_IDLE,      // 拨杆近中位，无定速
     RC_CRUISE_SETTLING,  // 拨杆非零，计时 2s
     RC_CRUISE_LATCHED,   // 2s 已到，候向零点回撤 20 点触发定速
-    RC_CRUISE_ACTIVE,    // 定速激活，保持定速值直到拨杆达到原设定值才取消
+    RC_CRUISE_ACTIVATING,// 定速触发后，平滑回升到锁定值
+    RC_CRUISE_ACTIVE,    // 定速激活，保持定速值直到收到取消手势
+    RC_CRUISE_CANCELLING,// 收到取消指令后，定速值缓慢归零
 } rc_cruise_state_t;
 
 static rc_cruise_state_t s_cruise_state    = RC_CRUISE_IDLE;
 static float             s_cruise_value    = 0.0f;  // 锁定的定速值
 static float             s_settle_value    = 0.0f;  // 正在计时的稳停值
 static int64_t           s_settle_start_us = 0;     // 计时起始时刻
+static float             s_activate_from_value = 0.0f;
+static int64_t           s_activate_start_us = 0;
+static bool              s_cancel_armed    = false; // 定速激活后，是否已检测到回中
+static float             s_cancel_from_value = 0.0f;
+static int64_t           s_cancel_start_us = 0;
 
 // ==================== 内部状态 ====================
 static volatile int64_t  s_rising_us  = 0;    // 上升沿时间戳
@@ -127,6 +135,8 @@ float rc_input_get_throttle(void)
     // 信号丢失：取消定速并归零
     if (!rc_input_is_valid()) {
         s_cruise_state = RC_CRUISE_IDLE;
+        s_activate_from_value = 0.0f;
+        s_cancel_armed = false;
         ESP_LOGW(TAG, "RC 信号超时，返回 0 油门并取消定速");
         return 0.0f;
     }
@@ -152,6 +162,8 @@ float rc_input_get_throttle(void)
             s_cruise_state    = RC_CRUISE_SETTLING;
             s_settle_value    = raw;
             s_settle_start_us = now;
+            s_activate_from_value = 0.0f;
+            s_cancel_armed    = false;
         }
         return raw;  // 通常为 0
 
@@ -160,6 +172,8 @@ float rc_input_get_throttle(void)
         if (raw == 0.0f) {
             // 2s 前松手，不定速
             s_cruise_state = RC_CRUISE_IDLE;
+            s_activate_from_value = 0.0f;
+            s_cancel_armed = false;
             return 0.0f;
         }
         if (fabsf(raw - s_settle_value) > RC_CRUISE_TOL_PCT) {
@@ -171,6 +185,8 @@ float rc_input_get_throttle(void)
             // 等待2s，准备定速（向零点回撤 20 点时生效）
             s_cruise_value = s_settle_value;
             s_cruise_state = RC_CRUISE_LATCHED;
+            s_activate_from_value = 0.0f;
+            s_cancel_armed = false;
             ESP_LOGI(TAG, "定速候按 (%.1f%%)，向零点回撤 %.1f 点即生效",
                      s_cruise_value, RC_CRUISE_ENGAGE_RETREAT_PCT);
         }
@@ -179,41 +195,99 @@ float rc_input_get_throttle(void)
     // ---- 定速就绪，候向零点回撤触发 ----
     case RC_CRUISE_LATCHED:
         if ((s_cruise_value > 0.0f &&
-             raw <= (s_cruise_value + RC_CRUISE_ENGAGE_RETREAT_PCT)) ||
+             raw <= (s_cruise_value - RC_CRUISE_ENGAGE_RETREAT_PCT)) ||
             (s_cruise_value < 0.0f &&
-             raw >= (s_cruise_value - RC_CRUISE_ENGAGE_RETREAT_PCT))) {
-            // 向零点回撤超过阈值：定速生效
-            s_cruise_state = RC_CRUISE_ACTIVE;
-            ESP_LOGI(TAG, "定速激活: %.1f%%", s_cruise_value);
-            return s_cruise_value;
+             raw >= (s_cruise_value + RC_CRUISE_ENGAGE_RETREAT_PCT))) {
+            // 向零点回撤超过阈值：开始平滑回升到锁定值
+            s_activate_from_value = raw;
+            s_activate_start_us   = now;
+            s_cruise_state = (RC_CRUISE_ENGAGE_RAMP_MS > 0)
+                           ? RC_CRUISE_ACTIVATING
+                           : RC_CRUISE_ACTIVE;
+            s_cancel_armed = false;
+            ESP_LOGI(TAG, "定速触发: 当前 %.1f%% -> 目标 %.1f%%，缓升 %d ms",
+                     raw, s_cruise_value, RC_CRUISE_ENGAGE_RAMP_MS);
+            return (s_cruise_state == RC_CRUISE_ACTIVE) ? s_cruise_value : raw;
         }
         // 未达到触发阈值前，仍跟随拨杆
         return raw;
 
-    // ---- 定速激活，达到原设定值才取消 ----
+    // ---- 定速已触发，按配置时间平滑回升到锁定值 ----
+    case RC_CRUISE_ACTIVATING:
+        if (RC_CRUISE_ENGAGE_RAMP_MS <= 0) {
+            s_cruise_state = RC_CRUISE_ACTIVE;
+            return s_cruise_value;
+        }
+        {
+            float progress = (float)(now - s_activate_start_us) /
+                             ((float)RC_CRUISE_ENGAGE_RAMP_MS * 1000.0f);
+            if (progress >= 1.0f) {
+                s_cruise_state = RC_CRUISE_ACTIVE;
+                ESP_LOGI(TAG, "定速激活: %.1f%%", s_cruise_value);
+                return s_cruise_value;
+            }
+            return s_activate_from_value +
+                   (s_cruise_value - s_activate_from_value) * progress;
+        }
+
+    // ---- 定速激活，需先回中，再给非零信号触发取消 ----
     case RC_CRUISE_ACTIVE:
-        if ((s_cruise_value > 0.0f && raw >= s_cruise_value) ||
-            (s_cruise_value < 0.0f && raw <= s_cruise_value)) {
-            s_cruise_state = RC_CRUISE_IDLE;
-            ESP_LOGI(TAG, "定速取消：摇杆达到原设定值 %.1f%%", s_cruise_value);
-            return raw;
+        if (!s_cancel_armed) {
+            if (raw == 0.0f) {
+                s_cancel_armed = true;
+                ESP_LOGI(TAG, "定速取消已解锁：摇杆已回中，等待新的非零输入");
+            }
+            return s_cruise_value;
+        }
+        if (raw != 0.0f) {
+            s_cruise_state      = RC_CRUISE_CANCELLING;
+            s_cancel_from_value = s_cruise_value;
+            s_cancel_start_us   = now;
+            s_cancel_armed      = false;
+            ESP_LOGI(TAG, "定速取消触发：%.1f%% -> 0，缓降 %d ms",
+                     s_cancel_from_value, RC_CRUISE_CANCEL_RAMP_MS);
+            return s_cancel_from_value;
         }
         if (s_cruise_value == 0.0f) {
             // 异常兜底：避免 0 定速值导致状态卡死
             s_cruise_state = RC_CRUISE_IDLE;
+            s_activate_from_value = 0.0f;
+            s_cancel_armed = false;
             return raw;
         }
         return s_cruise_value;
 
+    // ---- 定速取消后，按配置时间线性缓降到 0 ----
+    case RC_CRUISE_CANCELLING:
+        if (RC_CRUISE_CANCEL_RAMP_MS <= 0) {
+            s_cruise_state = RC_CRUISE_IDLE;
+            s_activate_from_value = 0.0f;
+            return raw;
+        }
+        {
+            float progress = (float)(now - s_cancel_start_us) /
+                             ((float)RC_CRUISE_CANCEL_RAMP_MS * 1000.0f);
+            if (progress >= 1.0f) {
+                s_cruise_state      = RC_CRUISE_IDLE;
+                s_activate_from_value = 0.0f;
+                s_cancel_from_value = 0.0f;
+                return raw;
+            }
+            return s_cancel_from_value * (1.0f - progress);
+        }
+
     default:
         s_cruise_state = RC_CRUISE_IDLE;
+        s_activate_from_value = 0.0f;
+        s_cancel_armed = false;
         return raw;
     }
 }
 
 bool rc_input_is_cruising(void)
 {
-    return (s_cruise_state == RC_CRUISE_ACTIVE);
+    return (s_cruise_state == RC_CRUISE_ACTIVATING ||
+            s_cruise_state == RC_CRUISE_ACTIVE);
 }
 
 uint32_t rc_input_get_raw_pulse_us(void)
@@ -235,6 +309,8 @@ void rc_input_print_diag(void)
 void rc_input_cancel_cruise(void)
 {
     s_cruise_state = RC_CRUISE_IDLE;
+    s_activate_from_value = 0.0f;
+    s_cancel_armed = false;
 }
 
 uint32_t rc_input_get_raw_pwm(void)

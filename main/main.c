@@ -430,8 +430,10 @@ void control_core_task(void *pvParameters) {
         }
 
         // 获取当前的物理真实角度
-        float cur_steer_left, cur_steer_right;
+        float cur_steer_left = 180.0f, cur_steer_right = 180.0f;
+    #if CURRENT_RUN_MODE != MODE_IMU_DIFF_STEER
         steering_control_get_current_angles(&cur_steer_left, &cur_steer_right);
+    #endif
 
         // --- 姿态平衡环与推力矢量解算 ---
         bool imu_ok = false;
@@ -499,13 +501,59 @@ void control_core_task(void *pvParameters) {
                 steering_control_set_target(180.0f, 180.0f); // 翻车后舵机回正向下
                 steering_control_update(); 
             } else {
+#if CURRENT_RUN_MODE == MODE_IMU_DIFF_STEER
+                float base_push_signed = (g_forward_thrust / 100.0f) * 500.0f;
+                float abs_base_push = fabsf(base_push_signed);
+                float roll_cmd = state.roll_deg;
+                g_last_roll_deg = state.roll_deg;
+                g_heading_hold_active = false;
+                g_turn_state = 0;
+
+#if IMU_DIFF_STEER_REVERSE
+                roll_cmd = -roll_cmd;
+#endif
+
+                float roll_abs = fabsf(roll_cmd);
+                float roll_norm = 0.0f;
+                if (roll_abs > IMU_DIFF_STEER_ROLL_DEADZONE_DEG) {
+                    float denom = IMU_DIFF_STEER_ROLL_MAX_DEG - IMU_DIFF_STEER_ROLL_DEADZONE_DEG;
+                    if (denom <= 0.0f) {
+                        roll_norm = 1.0f;
+                    } else {
+                        roll_norm = (roll_abs - IMU_DIFF_STEER_ROLL_DEADZONE_DEG) / denom;
+                        if (roll_norm > 1.0f) roll_norm = 1.0f;
+                    }
+                }
+
+                float turn_delta = abs_base_push * IMU_DIFF_STEER_MAX_RATIO * roll_norm;
+                float left_push_signed = base_push_signed;
+                float right_push_signed = base_push_signed;
+
+                if (roll_cmd > 0.0f) {
+                    left_push_signed  += turn_delta;
+                    right_push_signed -= turn_delta;
+                } else if (roll_cmd < 0.0f) {
+                    left_push_signed  -= turn_delta;
+                    right_push_signed += turn_delta;
+                }
+
+                filter_target_L = 180.0f;
+                filter_target_R = 180.0f;
+                last_thrust_motor_L = 0.0f;
+                last_thrust_motor_R = 0.0f;
+                motor_control_set_steering_pwm(1500, 1500);
+                motor_control_set_pwm_bidirectional(fabsf(left_push_signed),
+                                                    fabsf(right_push_signed),
+                                                    left_push_signed < 0.0f,
+                                                    right_push_signed < 0.0f);
+#else
                 // ====== 核心：相反竖直分量 + 相同水平分量平衡方案（不反转电机） ======
                 // 利用舵机能旋转过 180° 的能力：一侧桨翻到上半圆即可"正转却向下推"。
-                //   - 两侧水平分量都 = H_thrust  → 直行不偏航
+                //   - 两侧水平分量都 = H_thrust  → 直行
+                // 角度约定（θ：舵机物理角，不偏航
                 //   - 两侧竖直分量等大反向 (+dV / -dV) → 产生纠偏力矩
                 //   - 两侧推力幅值相等  → 同时无电机反转
-                //
-                // 角度约定（θ：舵机物理角，0~360°，180°=正下）
+                //0~360°，180°=正下）
                 //   右桨：θ_R = 180° − atan2(H, V_R) × 180/π
                 //   左桨：θ_L = 180° + atan2(H, V_L) × 180/π
                 //   推力：T = √(V² + H²)
@@ -760,6 +808,7 @@ void control_core_task(void *pvParameters) {
                 last_thrust_motor_R = thrust_motor_R;
 
                 motor_control_set_pwm_bidirectional(thrust_motor_L, thrust_motor_R, false, false);
+#endif
 
             control_loop_tail: ;  // 特殊路径（fwd≈0，纯反转模式）跳到这里
             }
@@ -771,6 +820,11 @@ void control_core_task(void *pvParameters) {
         }
 
         // ====== 编码器故障检测与处理 ======
+#if CURRENT_RUN_MODE == MODE_IMU_DIFF_STEER
+        bool enc_left_fault = false;
+        bool enc_right_fault = false;
+        motor_control_set_steering_pwm(1500, 1500);
+#else
         static bool enc_left_fault = false, enc_right_fault = false;
         static uint32_t enc_fault_warn_time = 0;
         bool enc_left_ok, enc_right_ok;
@@ -825,6 +879,7 @@ void control_core_task(void *pvParameters) {
         } else {
             steering_control_update();
         }
+#endif
 
         // 串口实时数据监测 (每 10 帧打一条，10Hz)
         static int print_cnt = 0;

@@ -11,6 +11,7 @@
 #define MODE_CALIBRATE_ESC       4  // ✨大电机电调校准模式：1000->2000->1000 循环扫描
 #define MODE_TEST_IMU_ONLY       5  // 🎯IMU 数据专用测试：实时打印原始和融合数据
 #define MODE_TEST_ENCODER_SPI    6  // 🔍编码器 SPI 原始数据专用测试：所有控制功能正常，仅输出 SPI 原始字节
+#define MODE_IMU_DIFF_STEER      7  // 体感差速转向：忽略舵机/编码器，仅用 IMU 横滚角控制左右推力差
 
 // 当前激活的模式 (编译前修改这里)
 #define CURRENT_RUN_MODE   3
@@ -75,6 +76,12 @@
 // --- RC 遥感 PWM 输入 (油门通道) ---
 // 标准 RC PWM: 1000~2000μs, 1500μs=中位; 接收机信号线 → GPIO 7
 #define PIN_RC_THROTTLE  7
+
+// --- RC 定速巡航参数 ---
+// 定速触发后，主推力会在该时间内从触发时刻的当前值线性回升到锁定值
+#define RC_CRUISE_ENGAGE_RAMP_MS  500
+// 取消定速后，主推力会在该时间内线性缓降到 0，再切回当前摇杆输入
+#define RC_CRUISE_CANCEL_RAMP_MS  2000
 
 // --- 磁控急停输入 (干簧管) ---
 // 接线：干簧管一端接 GND，另一端接此 GPIO（内部上拉至 3.3V，无需外部电阻）
@@ -178,6 +185,17 @@
 // ==========================================
 #define HEADING_KP          8.0f    // 航向保持 P 增益 (dH/°)
 #define HEADING_KI          0.05f   // 航向保持 I 增益 (dH/(°·s))
+
+// ==========================================
+// 4.7 IMU 体感差速转向参数（MODE_IMU_DIFF_STEER）
+//   - 舵机固定中位 1500us，忽略编码器与 steering_control 闭环
+//   - Roll 正负决定左右推力差方向；差速幅度同时受 Roll 角与前进速度影响
+//   - IMU_DIFF_STEER_REVERSE 用于快速翻转左右语义，适配 IMU 安装正反
+// ==========================================
+#define IMU_DIFF_STEER_ROLL_DEADZONE_DEG  1.0f   // 小于此角度不产生差速
+#define IMU_DIFF_STEER_ROLL_MAX_DEG       25.0f  // 达到此角度后差速增益饱和
+#define IMU_DIFF_STEER_MAX_RATIO          0.8f   // 最大差速 = 当前基础推力的该比例
+#define IMU_DIFF_STEER_REVERSE            0      // 0=默认方向, 1=左右语义翻转
 
 // ==========================================
 // 5. 物理与控制参数 (原 Python 映射)
