@@ -259,14 +259,6 @@ static float spi_read_encoder(spi_device_handle_t dev, bool *valid_out) {
 
 #endif  // !ENC_USE_SPI
 
-// 最短路径环形误差计算
-static float shortest_angle_error(float target, float current) {
-    float err = target - current;
-    while (err > 180.0f)  err -= 360.0f;
-    while (err < -180.0f) err += 360.0f;
-    return err;
-}
-
 // ---------- NVS 校准存取 ----------
 static esp_err_t nvs_load_offsets(float *off_l, float *off_r) {
     nvs_handle_t h;

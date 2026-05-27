@@ -14,7 +14,7 @@
 #define MODE_IMU_DIFF_STEER      7  // 体感差速转向：忽略舵机/编码器，仅用 IMU 横滚角控制左右推力差
 
 // 当前激活的模式 (编译前修改这里)
-#define CURRENT_RUN_MODE   3
+#define CURRENT_RUN_MODE   MODE_IMU_DIFF_STEER
 
 #define MAIN_PRINT_INTERVAL  10  // 串口实时数据监测频率（帧数间隔，100Hz/10=10Hz）
 
@@ -193,7 +193,7 @@
 //   - IMU_DIFF_STEER_REVERSE 用于快速翻转左右语义，适配 IMU 安装正反
 // ==========================================
 #define IMU_DIFF_STEER_ROLL_DEADZONE_DEG  1.0f   // 小于此角度不产生差速
-#define IMU_DIFF_STEER_ROLL_MAX_DEG       25.0f  // 达到此角度后差速增益饱和
+#define IMU_DIFF_STEER_ROLL_MAX_DEG       15.0f  // 达到此角度后差速增益饱和
 #define IMU_DIFF_STEER_MAX_RATIO          0.8f   // 最大差速 = 当前基础推力的该比例
 #define IMU_DIFF_STEER_REVERSE            0      // 0=默认方向, 1=左右语义翻转
 

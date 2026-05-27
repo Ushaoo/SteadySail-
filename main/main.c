@@ -296,13 +296,15 @@ void control_core_task(void *pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xFrequency = pdMS_TO_TICKS(10); // 10ms = 100Hz
 
-    // 低通滤波平滑目标角度 (避免舵机高频抖动)
+    // 非差速转向模式下需要保留舵机目标滤波和推力门控历史。
+#if CURRENT_RUN_MODE != MODE_IMU_DIFF_STEER
     static float filter_target_L = 180.0f;
     static float filter_target_R = 180.0f;
 
     // Scheme A 舵机就位率门控历史（提到外层，便于特殊路径下重置）
     static float last_thrust_motor_L = 0.0f;
     static float last_thrust_motor_R = 0.0f;
+#endif
 
     // 用于硬急停首次触发时打印一次日志（避免 ISR 内调日志）
     static bool s_hard_estop_logged = false;
@@ -537,10 +539,6 @@ void control_core_task(void *pvParameters) {
                     right_push_signed += turn_delta;
                 }
 
-                filter_target_L = 180.0f;
-                filter_target_R = 180.0f;
-                last_thrust_motor_L = 0.0f;
-                last_thrust_motor_R = 0.0f;
                 motor_control_set_steering_pwm(1500, 1500);
                 motor_control_set_pwm_bidirectional(fabsf(left_push_signed),
                                                     fabsf(right_push_signed),
@@ -578,6 +576,7 @@ void control_core_task(void *pvParameters) {
                 //     正反转方向 = sign(V_R) = sign(dV)
                 //   原 V_L = -dV → 作用于物理右电机；推力 = |dV|，方向 = sign(V_L) = -sign(dV)
                 const float H_DEADZONE = 5.0f;
+                bool skip_v3_scheme_a = false;
                 if (fabsf(H_thrust) < H_DEADZONE) {
                     // 1) 舵机强制中立位 180°（同步把滤波器拉回，避免下次进入 V3 路径时残留）
                     filter_target_L = 180.0f;
@@ -594,9 +593,10 @@ void control_core_task(void *pvParameters) {
                     last_thrust_motor_L = 0.0f;
                     last_thrust_motor_R = 0.0f;
 
-                    goto control_loop_tail;  // 跳过下面的 V3 + Scheme A 路径
+                    skip_v3_scheme_a = true;
                 }
 
+                if (!skip_v3_scheme_a) {
                 // 4. 由 (V, H) 解算舵机偏角与推力幅值
                 //    atan2(H, V) ∈ (-π, π]，可直接覆盖 0~360° 全部映射
                 //    特别注意：dV=0 且 H=0 时 V_L = -0.0f，atan2(0,-0) = π，会让左舵机跑到 0°；
@@ -808,9 +808,8 @@ void control_core_task(void *pvParameters) {
                 last_thrust_motor_R = thrust_motor_R;
 
                 motor_control_set_pwm_bidirectional(thrust_motor_L, thrust_motor_R, false, false);
+                }
 #endif
-
-            control_loop_tail: ;  // 特殊路径（fwd≈0，纯反转模式）跳到这里
             }
         } else {
             // I2C 读取失败保护

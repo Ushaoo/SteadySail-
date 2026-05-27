@@ -26,7 +26,7 @@ static const char *TAG = "RC_INPUT";
 // ==================== 定速巡航参数 ====================
 #define RC_CRUISE_SETTLE_US         2000000LL  // 拨杆稳定 2s 后锁定定速值
 #define RC_CRUISE_TOL_PCT           5.0f       // 定速追踪容差 ±5%
-#define RC_CRUISE_ENGAGE_RETREAT_PCT 20.0f     // 锁定后向零点回撤 20 个百分点触发定速
+#define RC_CRUISE_ENGAGE_RETREAT_PCT 10.0f     // 锁定后向零点回撤 20 个百分点触发定速
 
 // ==================== 定速状态机 ====================
 typedef enum {
