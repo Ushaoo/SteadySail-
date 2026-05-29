@@ -1,29 +1,55 @@
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-*.so
-*.egg-info/
+# ===== ESP-IDF =====
+build/
+sdkconfig.old
+sdkconfig.defaults.*.old
+managed_components/
+dependencies.lock
 
-# Virtual environments
-motor_env/
-.venv/
-venv/
-ENV/
-torpedo/
-torpedo/torpedo_keyboard_control.py
-torpedo/torpedo_main.py
+# ESP-IDF generated files
+*.bin
+*.elf
+*.map
 
-pifpio/
-
-# OS / tooling
-.DS_Store
-Thumbs.db
-.idea/
+# ===== VS Code =====
 .vscode/
 
-# Logs
-*.log
+# ===== CMake =====
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CMakeScripts/
+Testing/
+Makefile
+*.cmake
+!CMakeLists.txt
+compile_commands.json
 
-*.mp4
+# ===== Python (raspberry_pi_backup) =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+desktop.ini
+*~
+
+# ===== Editors / IDEs =====
+.idea/
+*.swp
+*.swo
+*.bak
+
+# ===== Logs / temp =====
+*.log
+*.tmp
+*.temp
